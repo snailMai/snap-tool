@@ -22,15 +22,13 @@ internal static class AnnotationRenderer
                 var pen = new Pen(brush, mark.Thickness);
                 if (mark.Kind == AnnotationKind.Arrow)
                 {
-                    var head = mark.ArrowHead();
-                    var left = new Point(head.Left.X, head.Left.Y); var right = new Point(head.Right.X, head.Right.Y);
-                    pen.Thickness = System.Math.Min(mark.Thickness, (left - right).Length);
-                    // Stop the shaft inside the head so a thick stroke never protrudes past the tip.
-                    dc.DrawLine(pen, start, new Point((left.X + right.X) / 2, (left.Y + right.Y) / 2));
-                    var triangle = new StreamGeometry();
-                    using (var context = triangle.Open())
-                    { context.BeginFigure(end, true, true); context.LineTo(left, true, false); context.LineTo(right, true, false); }
-                    dc.DrawGeometry(brush, null, triangle);
+                    var points = mark.ArrowOutline(); var arrow = new StreamGeometry();
+                    using (var context = arrow.Open())
+                    {
+                        context.BeginFigure(start, true, true);
+                        for (int i = 1; i < points.Length; i++) context.LineTo(new Point(points[i].X, points[i].Y), true, false);
+                    }
+                    dc.DrawGeometry(brush, null, arrow);
                 }
                 else dc.DrawLine(pen, start, end);
                 continue;

@@ -7,6 +7,7 @@ using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Media.Effects;
 using System.Windows.Threading;
 using Microsoft.Win32;
 using SnapTool.Core;
@@ -15,11 +16,14 @@ namespace SnapTool;
 
 internal sealed class PinWindow : Window
 {
+    internal const int FrameInset = 9; // Eight physical pixels for the glow and one for the blue border.
     internal BitmapSource? Original { get; private set; }
     internal PinGeometry Geometry { get; }
     internal bool Busy { get; private set; }
     internal string Status { get; private set; } = "";
     private readonly Image picture;
+    private readonly Border frame;
+    private readonly DropShadowEffect glow = new() { Color = Color.FromRgb(75, 145, 245), ShadowDepth = 0, Opacity = 0.55 };
     private readonly TextBlock status = new() { Foreground = Brushes.White, Background = Brushes.Black,
         TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Bottom, IsHitTestVisible = false, Visibility = Visibility.Collapsed };
     private readonly CancellationTokenSource lifetime = new();
@@ -36,12 +40,18 @@ internal sealed class PinWindow : Window
         this.chooseSavePath = chooseSavePath ?? ChooseSavePath;
         Geometry = new(image.PixelWidth, image.PixelHeight, new(selection.Left, selection.Top), WorkArea(new(selection.Left, selection.Top)));
         WindowStyle = WindowStyle.None; ResizeMode = ResizeMode.NoResize;
-        Topmost = true; ShowInTaskbar = false; ShowActivated = false; Background = Brushes.Black;
-        Width = Geometry.Bounds.Width; Height = Geometry.Bounds.Height;
+        AllowsTransparency = true;
+        Topmost = true; ShowInTaskbar = false; ShowActivated = false; Background = Brushes.Transparent;
+        Width = Geometry.Bounds.Width + FrameInset * 2; Height = Geometry.Bounds.Height + FrameInset * 2;
         picture = new Image { Source = image, Stretch = Stretch.Fill,
             ToolTip = "拖动移动 · 滚轮缩放 · 双击关闭\nCtrl+C 复制 · Ctrl+S 保存 · Esc 关闭 · 右键恢复原始比例" };
         RenderOptions.SetBitmapScalingMode(picture, BitmapScalingMode.HighQuality);
-        var grid = new Grid(); grid.Children.Add(picture); grid.Children.Add(status); Content = grid;
+        var grid = new Grid(); grid.Children.Add(picture); grid.Children.Add(status);
+        frame = new Border { BorderBrush = new SolidColorBrush(Color.FromRgb(100, 170, 255)),
+            Background = Brushes.White, Child = grid };
+        // Shadow lives behind the image so it cannot blur the image or its one-pixel border.
+        var shadow = new Border { Background = frame.BorderBrush, Effect = glow, IsHitTestVisible = false };
+        var root = new Grid(); root.Children.Add(shadow); root.Children.Add(frame); Content = root;
         var menu = new ContextMenu();
         AddMenu(menu, "复制图片    Ctrl+C", async () => await CopyImage());
         AddMenu(menu, "保存 PNG    Ctrl+S", SaveImage);
@@ -110,7 +120,13 @@ internal sealed class PinWindow : Window
         try
         {
             var r = Geometry.Bounds;
-            if (!Native.SetWindowPos(handle, new IntPtr(-1), r.Left, r.Top, r.Width, r.Height, 0x0010))
+            var dpi = VisualTreeHelper.GetDpi(this);
+            frame.Margin = new Thickness(8 / dpi.DpiScaleX, 8 / dpi.DpiScaleY, 8 / dpi.DpiScaleX, 8 / dpi.DpiScaleY);
+            frame.BorderThickness = new Thickness(1 / dpi.DpiScaleX, 1 / dpi.DpiScaleY, 1 / dpi.DpiScaleX, 1 / dpi.DpiScaleY);
+            ((Border)((Grid)Content).Children[0]).Margin = frame.Margin;
+            glow.BlurRadius = 8 / dpi.DpiScaleX;
+            if (!Native.SetWindowPos(handle, new IntPtr(-1), r.Left - FrameInset, r.Top - FrameInset,
+                r.Width + FrameInset * 2, r.Height + FrameInset * 2, 0x0010))
                 throw new System.ComponentModel.Win32Exception();
             Title = $"Snap Tool · 贴图 {Geometry.Scale:P0}";
         }

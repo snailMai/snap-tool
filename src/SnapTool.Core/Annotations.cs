@@ -9,14 +9,16 @@ public sealed record Annotation(AnnotationKind Kind, PixelPoint Start, PixelPoin
     public PixelRect Rectangle => PixelRect.Between(Start, End);
     public double Length => Math.Sqrt(Math.Pow(End.X - Start.X, 2) + Math.Pow(End.Y - Start.Y, 2));
 
-    public ((double X, double Y) Left, (double X, double Y) Right) ArrowHead()
+    public (double X, double Y)[] ArrowOutline()
     {
         double length = Length;
-        if (length == 0) return ((End.X, End.Y), (End.X, End.Y));
-        double size = Math.Min(Math.Max(10, Thickness * 3), length / 2);
+        if (length == 0) return [];
+        double size = Math.Min(Math.Max(12, Thickness * 5), length / 2);
         double ux = (End.X - Start.X) / length, uy = (End.Y - Start.Y) / length;
-        double x = End.X - ux * size, y = End.Y - uy * size;
-        return ((x - uy * size / 2, y + ux * size / 2), (x + uy * size / 2, y - ux * size / 2));
+        (double X, double Y) Point(double back, double side) => (End.X - ux * back - uy * side, End.Y - uy * back + ux * side);
+        // A pointed tail, widening shaft and inset neck form one filled outline at every angle.
+        return [(Start.X, Start.Y), Point(size * 0.75, size * 0.2), Point(size, size * 0.5),
+            (End.X, End.Y), Point(size, -size * 0.5), Point(size * 0.75, -size * 0.2)];
     }
 }
 
@@ -69,14 +71,11 @@ public sealed class Annotations
             if (items[i].Kind != AnnotationKind.Rectangle)
             {
                 var mark = items[i];
-                if (Distance(p, (mark.Start.X, mark.Start.Y), (mark.End.X, mark.End.Y)) <= hitWidth) return (i, SelectionHit.Move);
                 if (mark.Kind == AnnotationKind.Arrow)
                 {
-                    var head = mark.ArrowHead();
-                    var tip = ((double)mark.End.X, (double)mark.End.Y);
-                    if (Distance(p, tip, head.Left) <= hitWidth || Distance(p, tip, head.Right) <= hitWidth ||
-                        Distance(p, head.Left, head.Right) <= hitWidth) return (i, SelectionHit.Move);
+                    if (HitOutline(p, mark.ArrowOutline(), tolerance)) return (i, SelectionHit.Move);
                 }
+                else if (Distance(p, (mark.Start.X, mark.Start.Y), (mark.End.X, mark.End.Y)) <= hitWidth) return (i, SelectionHit.Move);
                 continue;
             }
             if (p.X < r.Left - hitWidth || p.X > r.Right + hitWidth || p.Y < r.Top - hitWidth || p.Y > r.Bottom + hitWidth) continue;
@@ -85,6 +84,19 @@ public sealed class Annotations
                 return (i, SelectionHit.Move);
         }
         return (-1, SelectionHit.None);
+    }
+
+    private static bool HitOutline(PixelPoint p, (double X, double Y)[] outline, int tolerance)
+    {
+        bool inside = false;
+        for (int i = 0; i < outline.Length; i++)
+        {
+            var a = outline[i]; var b = outline[(i + 1) % outline.Length];
+            if (Distance(p, a, b) <= tolerance) return true;
+            if ((a.Y > p.Y) != (b.Y > p.Y) && p.X < (b.X - a.X) * (p.Y - a.Y) / (b.Y - a.Y) + a.X)
+                inside = !inside;
+        }
+        return inside;
     }
 
     private static double Distance(PixelPoint p, (double X, double Y) a, (double X, double Y) b)

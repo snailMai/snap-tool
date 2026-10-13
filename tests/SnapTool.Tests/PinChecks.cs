@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -17,7 +18,8 @@ namespace SnapTool.Tests;
 
 internal static class PinChecks
 {
-    private static void Assert(bool value) { if (!value) throw new Exception("Pin assertion failed"); }
+    private static void Assert(bool value, [CallerArgumentExpression(nameof(value))] string? expression = null)
+    { if (!value) throw new Exception("Pin assertion failed: " + expression); }
     private static DesktopSnapshot Snapshot() => new(new(-100, -50, 300, 250), [new(-100, -50, 300, 250)], OcrChecks.Sample(true, 400, 300));
     private static CaptureSession Session(Action<BitmapSource, PixelRect> pin, Action? finished = null)
     {
@@ -195,14 +197,38 @@ internal static class PinChecks
                 string dir = Path.Combine(Program.FindRoot(), ".tmp", "pin-preview"); Directory.CreateDirectory(dir);
                 var content = (FrameworkElement)second.Content; content.UpdateLayout();
                 var dpi = VisualTreeHelper.GetDpi(second);
-                var preview = new RenderTargetBitmap(900, 220, 96 * dpi.DpiScaleX, 96 * dpi.DpiScaleY, PixelFormats.Pbgra32); preview.Render(content);
-                Assert(Pixels(preview).SequenceEqual(Pixels(image)));
+                int inset = PinWindow.FrameInset;
+                var preview = new RenderTargetBitmap(900 + inset * 2, 220 + inset * 2, 96 * dpi.DpiScaleX, 96 * dpi.DpiScaleY, PixelFormats.Pbgra32); preview.Render(content);
                 ImageOutput.SavePng(preview, Path.Combine(dir, "pin.png"));
+                var actualPixels = Pixels(new CroppedBitmap(preview, new Int32Rect(inset, inset, 900, 220)));
+                var expectedPixels = Pixels(image);
+                // Synthetic text includes alpha=254 antialiasing pixels; the frame composites these over white.
+                for (int i = 0; i < expectedPixels.Length; i += 4)
+                {
+                    int background = 255 - expectedPixels[i + 3];
+                    for (int channel = 0; channel < 3; channel++) expectedPixels[i + channel] += (byte)background;
+                    expectedPixels[i + 3] = 255;
+                }
+                Assert(actualPixels.SequenceEqual(expectedPixels));
+                var blue = Pixels(new CroppedBitmap(preview, new Int32Rect(inset - 1, 80, 1, 1)));
+                Assert(blue[0] == 255 && blue[1] == 170 && blue[2] == 100 && blue[3] == 255);
+                var shadow = Pixels(new CroppedBitmap(preview, new Int32Rect(inset - 4, 80, 1, 1)));
+                Assert(shadow[3] > 0 && shadow[3] < 255);
+                Assert(Pixels(second.Original!).SequenceEqual(Pixels(image)));
+                var display = new DrawingVisual();
+                using (var dc = display.RenderOpen())
+                {
+                    dc.DrawRectangle(new SolidColorBrush(Color.FromRgb(245, 247, 243)), null,
+                        new Rect(0, 0, preview.PixelWidth + 40, preview.PixelHeight + 40));
+                    dc.DrawImage(preview, new Rect(20, 20, preview.PixelWidth, preview.PixelHeight));
+                }
+                var displayPreview = new RenderTargetBitmap(preview.PixelWidth + 40, preview.PixelHeight + 40, 96, 96, PixelFormats.Pbgra32);
+                displayPreview.Render(display); ImageOutput.SavePng(displayPreview, Path.Combine(dir, "pin-on-background.png"));
                 second.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(second), Environment.TickCount, Key.Escape)
                     { RoutedEvent = Keyboard.PreviewKeyDownEvent });
                 Assert(manager.Count == 1 && second.Original == null);
                 manager.CloseAll(); Assert(manager.Count == 0 && second.Original == null);
-                Console.WriteLine("PASS native pin windows: size, zoom, context-menu reset, monitor moves, suspend/resume, double-click close, Esc close, close all");
+                Console.WriteLine("PASS native pin windows: image size, blue border, translucent glow, unchanged pixels, zoom, context-menu reset, monitor moves, suspend/resume, double-click close, Esc close, close all");
             }
             finally { manager.CloseAll(); }
         });
@@ -211,6 +237,11 @@ internal static class PinChecks
     private static void CheckBounds(PinWindow window)
     {
         Assert(GetWindowRect(new WindowInteropHelper(window).Handle, out var r));
-        Assert(new PixelRect(r.Left, r.Top, r.Right, r.Bottom) == window.Geometry.Bounds);
+        int inset = PinWindow.FrameInset;
+        Assert(new PixelRect(r.Left + inset, r.Top + inset, r.Right - inset, r.Bottom - inset) == window.Geometry.Bounds);
+        var root = (Grid)window.Content; var frame = (Border)root.Children[1]; var content = (Grid)frame.Child;
+        var dpi = VisualTreeHelper.GetDpi(window);
+        Assert(Math.Abs(content.ActualWidth * dpi.DpiScaleX - window.Geometry.Bounds.Width) < 0.01);
+        Assert(Math.Abs(content.ActualHeight * dpi.DpiScaleY - window.Geometry.Bounds.Height) < 0.01);
     }
 }

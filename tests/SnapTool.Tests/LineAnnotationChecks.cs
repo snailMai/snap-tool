@@ -127,10 +127,10 @@ internal static class LineAnnotationChecks
             foreach (int width in new[] { 2, 3, 5, 8 })
                 foreach (var end in new[] { new PixelPoint(2, 0), new(-2, 0), new(0, 2), new(0, -2), new(100, 100) })
                 {
-                    var mark = new Annotation(AnnotationKind.Arrow, new(0, 0), end, 0, width); var head = mark.ArrowHead();
-                    double centerX = (head.Left.X + head.Right.X) / 2, centerY = (head.Left.Y + head.Right.Y) / 2;
+                    var mark = new Annotation(AnnotationKind.Arrow, new(0, 0), end, 0, width); var outline = mark.ArrowOutline();
+                    double centerX = (outline[2].X + outline[4].X) / 2, centerY = (outline[2].Y + outline[4].Y) / 2;
                     double projection = (centerX * end.X + centerY * end.Y) / (mark.Length * mark.Length);
-                    Assert(double.IsFinite(head.Left.X) && projection >= 0.5 && projection < 1);
+                    Assert(outline.All(p => double.IsFinite(p.X) && double.IsFinite(p.Y)) && projection >= 0.5 && projection < 1);
                     Assert(AnnotationRenderer.Compose(Snapshot(), Bounds, [mark]).IsFrozen);
                 }
         });
@@ -211,6 +211,21 @@ internal static class LineAnnotationChecks
             var output = AnnotationRenderer.Compose(Snapshot(), Bounds, [mark]);
             Assert(Pixel(output, 100, 47) == 0xFFFFFF && Pixel(output, 100, 50) != 0xFFFFFF);
         });
+        test("arrow has pointed tail widened shaft and notched head matching reference", () =>
+        {
+            var mark = new Annotation(AnnotationKind.Arrow, new(0, 0), new(420, 0), 0, 8);
+            Assert(mark.ArrowOutline().SequenceEqual(new (double X, double Y)[] { (0, 0), (390, 8), (380, 20), (420, 0), (380, -20), (390, -8) }));
+            Assert(new Annotation(AnnotationKind.Arrow, new(0, 0), new(0, 0), 0, 8).ArrowOutline().Length == 0);
+        });
+        test("tapered arrow pixels widen from tail and hit testing excludes notch blank", () =>
+        {
+            var m = Mark(AnnotationKind.Arrow, new(-80, 50), new(280, 50)); m.SetStyle(0, 8); m.Deselect();
+            var output = AnnotationRenderer.Compose(Snapshot(), Bounds, m.Items);
+            Assert(Pixel(output, 40, 103) == 0xFFFFFF && Pixel(output, 320, 103) == 0);
+            Assert(Pixel(output, 345, 115) == 0 && Pixel(output, 332, 116) == 0xFFFFFF);
+            Assert(m.HitTest(new(245, 65), 1).Index == 0 && m.HitTest(new(232, 66), 1).Index == -1);
+            Assert(m.HitTest(new(-60, 54), 1).Index == -1 && m.HitTest(new(220, 54), 1).Index == 0);
+        });
         test("line arrow toolbar and keyboard switch modes and share deletion", () =>
         {
             var s = Session(); var window = new OverlayWindow(s, Bounds);
@@ -234,5 +249,15 @@ internal static class LineAnnotationChecks
             }
             finally { window.Close(); s.Close(); }
         });
+    }
+
+    internal static void RenderArrowPreview()
+    {
+        var bounds = new PixelRect(0, 0, 500, 190);
+        var snapshot = new DesktopSnapshot(bounds, [bounds], OcrChecks.Sample(true, 500, 190));
+        var output = AnnotationRenderer.Compose(snapshot, bounds,
+            [new(AnnotationKind.Arrow, new(27, 97), new(447, 94), 0xE3452B, 8)]);
+        string dir = Path.Combine(Program.FindRoot(), ".tmp", "arrow-style"); Directory.CreateDirectory(dir);
+        ImageOutput.SavePng(output, Path.Combine(dir, "preview.png"));
     }
 }
