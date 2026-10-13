@@ -22,6 +22,7 @@ internal sealed class App : Application
     private readonly OcrService ocr = new();
     private readonly TranslationSettings translationSettings = new();
     private readonly YoudaoTranslator translator = new();
+    private readonly PinWindows pins = new();
 
     [STAThread]
     public static void Main(string[] args)
@@ -53,6 +54,7 @@ internal sealed class App : Application
         menu.Items.Add("截图    Ctrl+F2", null, (_, _) => QueueCapture());
         menu.Items.Add("重新注册 Ctrl+F2", null, (_, _) => RegisterHotkey(true));
         menu.Items.Add("翻译设置…", null, (_, _) => ShowTranslationSettings(null));
+        menu.Items.Add("关闭全部贴图", null, (_, _) => pins.CloseAll());
         menu.Items.Add(new Forms.ToolStripSeparator());
         menu.Items.Add("退出", null, (_, _) => Shutdown());
         tray = new Forms.NotifyIcon { Icon = icon, Text = "Snap Tool · Ctrl+F2 截图", ContextMenuStrip = menu, Visible = true };
@@ -99,7 +101,7 @@ internal sealed class App : Application
     {
         if (message == 0x0312 && wParam.ToInt32() == HotkeyId)
         { handled = true; QueueCapture(); }
-        else if (message == 0x007E) session?.Close(); // Display topology changed: discard stale coordinates.
+        else if (message == 0x007E) { session?.Close(); pins.Reposition(); } // Display topology changed.
         else if (message == 0x0011) { session?.Close(); Shutdown(); } // Session ending.
         return IntPtr.Zero;
     }
@@ -116,13 +118,17 @@ internal sealed class App : Application
                 // Give a closing tray menu a frame to disappear before freezing the desktop.
                 await System.Threading.Tasks.Task.Delay(100);
                 if (source == null) return;
-                session = new CaptureSession(DesktopSnapshot.Capture(), () => session = null,
-                    (title, text) => Notify(title, text), ocr.Recognize, showTranslation: ShowTranslation);
+                // Capture visible pins, then hide their interactive windows behind the capture overlay.
+                var snapshot = DesktopSnapshot.Capture();
+                pins.Suspend();
+                session = new CaptureSession(snapshot, () => { session = null; pins.Resume(); },
+                    (title, text) => Notify(title, text), ocr.Recognize, showTranslation: ShowTranslation,
+                    showPin: (image, rectangle) => pins.Add(image, rectangle));
                 session.Show();
             }
             catch (Exception ex)
             {
-                session?.Close(); session = null;
+                session?.Close(); session = null; pins.Resume();
                 MessageBox.Show("无法开始截图。\n" + ex.Message, "Snap Tool", MessageBoxButton.OK, MessageBoxImage.Error);
             }
             finally { queued = false; }
@@ -147,6 +153,7 @@ internal sealed class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        pins.CloseAll();
         session?.Close();
         ocr.Dispose();
         translator.Dispose();

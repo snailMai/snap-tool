@@ -12,12 +12,14 @@ namespace SnapTool;
 
 internal sealed class CaptureSession(DesktopSnapshot snapshot, Action finished, Action<string, string> notify,
     Func<BitmapSource, CancellationToken, Task<string>> recognize,
-    Func<string, CancellationToken, Task>? copyText = null, Action<string>? showTranslation = null)
+    Func<string, CancellationToken, Task>? copyText = null, Action<string>? showTranslation = null,
+    Action<BitmapSource, PixelRect>? showPin = null)
 {
     internal DesktopSnapshot Snapshot { get; } = snapshot;
     internal SelectionModel Selection { get; } = new(snapshot.Bounds);
-    internal RectangleAnnotations Annotations { get; } = new();
-    internal bool RectangleTool { get; private set; }
+    internal Annotations Annotations { get; } = new();
+    internal AnnotationKind? Tool { get; private set; }
+    internal bool Annotating => Tool != null;
     internal bool Dragging => Selection.Dragging || Annotations.Dragging;
     internal PixelPoint Pointer { get; private set; } = new(snapshot.Bounds.Left, snapshot.Bounds.Top);
     internal bool Busy { get; private set; }
@@ -45,7 +47,7 @@ internal sealed class CaptureSession(DesktopSnapshot snapshot, Action finished, 
         if (Busy || closed) return;
         Status = "";
         Pointer = p;
-        if (RectangleTool) Annotations.Begin(p, Selection.Rectangle, tolerance);
+        if (Tool is { } kind) Annotations.Begin(p, Selection.Rectangle, tolerance, kind);
         else Selection.Begin(p, tolerance);
         if (!Dragging) return;
         foreach (var window in windows) window.HideToolbar();
@@ -56,7 +58,7 @@ internal sealed class CaptureSession(DesktopSnapshot snapshot, Action finished, 
     {
         if (Busy || closed) return;
         Pointer = p;
-        if (RectangleTool) Annotations.Update(p, square);
+        if (Annotating) Annotations.Update(p, square);
         else Selection.Update(p);
         Refresh();
     }
@@ -65,7 +67,7 @@ internal sealed class CaptureSession(DesktopSnapshot snapshot, Action finished, 
     {
         if (Busy || closed) return;
         Pointer = p;
-        if (RectangleTool) Annotations.End(p, square);
+        if (Annotating) Annotations.End(p, square);
         else Selection.End(p);
         Refresh();
         if (Selection.Rectangle.IsEmpty) return;
@@ -73,10 +75,10 @@ internal sealed class CaptureSession(DesktopSnapshot snapshot, Action finished, 
         current?.Activate(); current?.ShowToolbar();
     }
 
-    internal void SetRectangleTool(bool enabled)
+    internal void SetTool(AnnotationKind? kind)
     {
         if (Busy || closed || Dragging || Selection.Rectangle.IsEmpty) return;
-        RectangleTool = enabled; Annotations.Deselect(); Status = ""; Refresh();
+        Tool = kind; Annotations.Deselect(); Status = ""; Refresh();
     }
 
     internal void SetAnnotationStyle(uint rgb, int thickness)
@@ -93,11 +95,26 @@ internal sealed class CaptureSession(DesktopSnapshot snapshot, Action finished, 
 
     internal void DeleteAnnotation()
     {
-        if (Busy || closed || Dragging || !RectangleTool) return;
+        if (Busy || closed || Dragging || !Annotating) return;
         Annotations.Delete(); Refresh();
     }
 
     internal BitmapSource CreateOutput() => AnnotationRenderer.Compose(Snapshot, Selection.Rectangle, Annotations.Items);
+
+    internal void Pin()
+    {
+        if (Busy || Dragging || Selection.Rectangle.IsEmpty || closed) return;
+        Busy = true; Status = "";
+        try
+        {
+            if (showPin == null) throw new InvalidOperationException("贴图入口不可用。");
+            var image = PinWindow.Detach(CreateOutput());
+            showPin(image, Selection.Rectangle);
+            Close();
+        }
+        catch (Exception) { if (!closed) { Status = "创建贴图失败，选区已保留，请重试。"; Refresh(); } }
+        finally { Busy = false; if (!closed) Refresh(); }
+    }
 
     internal void Refresh() { foreach (var window in windows) window.Refresh(); }
 

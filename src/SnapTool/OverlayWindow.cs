@@ -19,7 +19,7 @@ internal sealed class OverlayWindow : Window
     private readonly Canvas canvas;
     private readonly Border toolbar;
     private readonly List<Button> outputButtons = [];
-    private Button rectangleButton = null!, selectionButton = null!, undoButton = null!, deleteButton = null!;
+    private Button rectangleButton = null!, lineButton = null!, arrowButton = null!, selectionButton = null!, undoButton = null!, deleteButton = null!;
     private readonly ComboBox colorBox = new() { Width = 82, Margin = new Thickness(4), VerticalContentAlignment = VerticalAlignment.Center };
     private readonly ComboBox thicknessBox = new() { Width = 70, Margin = new Thickness(4), VerticalContentAlignment = VerticalAlignment.Center };
     private StackPanel stylePanel = null!;
@@ -62,16 +62,19 @@ internal sealed class OverlayWindow : Window
     {
         var panel = new StackPanel { Orientation = Orientation.Horizontal };
         outputButtons.Add(AddButton(panel, "复制  ↵", "复制图片，Enter", async () => await session.Copy(this), true));
+        outputButtons.Add(AddButton(panel, "贴图", "置顶贴图，F3", session.Pin));
         outputButtons.Add(AddButton(panel, "识别文字", "识别文字，Shift+C", async () => await session.RecognizeText()));
         outputButtons.Add(AddButton(panel, "翻译", "有道文本翻译，Shift+T", async () => await session.RecognizeText(true)));
         outputButtons.Add(AddButton(panel, "保存", "保存 PNG，Ctrl+S", () => session.Save(this)));
         AddButton(panel, "取消", "取消截图，Esc", () => session.Close());
         var tools = new StackPanel { Orientation = Orientation.Horizontal };
-        selectionButton = AddButton(tools, "调整选区", "调整截图选区，V", () => session.SetRectangleTool(false));
-        rectangleButton = AddButton(tools, "矩形", "绘制矩形，R；按住 Shift 绘制正方形", () => session.SetRectangleTool(true));
+        selectionButton = AddButton(tools, "调整选区", "调整截图选区，V", () => session.SetTool(null));
+        rectangleButton = AddButton(tools, "矩形", "绘制矩形，R；按住 Shift 绘制正方形", () => session.SetTool(AnnotationKind.Rectangle));
+        lineButton = AddButton(tools, "直线", "绘制直线，L；Shift 限制为水平、垂直或 45°", () => session.SetTool(AnnotationKind.Line));
+        arrowButton = AddButton(tools, "箭头", "绘制箭头，A；Shift 限制为水平、垂直或 45°", () => session.SetTool(AnnotationKind.Arrow));
         undoButton = AddButton(tools, "撤销", "撤销标注，Ctrl+Z", session.UndoAnnotation);
-        deleteButton = AddButton(tools, "删除框", "删除选中标注，Delete", session.DeleteAnnotation);
-        outputButtons.AddRange([selectionButton, rectangleButton, undoButton, deleteButton]);
+        deleteButton = AddButton(tools, "删除", "删除选中标注，Delete", session.DeleteAnnotation);
+        outputButtons.AddRange([selectionButton, rectangleButton, lineButton, arrowButton, undoButton, deleteButton]);
         stylePanel = new StackPanel { Orientation = Orientation.Horizontal, Visibility = Visibility.Collapsed };
         stylePanel.Children.Add(new TextBlock { Text = "颜色", Foreground = Brushes.White, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 2, 0) });
         foreach (var color in Colors) colorBox.Items.Add(new ComboBoxItem { Content = color.Name, Tag = color.Rgb });
@@ -145,16 +148,23 @@ internal sealed class OverlayWindow : Window
         surface.InvalidateVisual();
         foreach (var button in outputButtons) { button.IsEnabled = !session.Busy; button.Opacity = session.Busy ? 0.5 : 1; }
         undoButton.IsEnabled = !session.Busy && session.Annotations.CanUndo;
-        deleteButton.IsEnabled = !session.Busy && session.RectangleTool && session.Annotations.Selected != null;
-        rectangleButton.Background = session.RectangleTool ? Brushes.Teal : new SolidColorBrush(Color.FromRgb(40, 50, 70));
-        selectionButton.Background = !session.RectangleTool ? Brushes.Teal : new SolidColorBrush(Color.FromRgb(40, 50, 70));
-        stylePanel.Visibility = session.RectangleTool ? Visibility.Visible : Visibility.Collapsed;
+        deleteButton.IsEnabled = !session.Busy && session.Annotating && session.Annotations.Selected != null;
+        rectangleButton.Background = session.Tool == AnnotationKind.Rectangle ? Brushes.Teal : new SolidColorBrush(Color.FromRgb(40, 50, 70));
+        lineButton.Background = session.Tool == AnnotationKind.Line ? Brushes.Teal : new SolidColorBrush(Color.FromRgb(40, 50, 70));
+        arrowButton.Background = session.Tool == AnnotationKind.Arrow ? Brushes.Teal : new SolidColorBrush(Color.FromRgb(40, 50, 70));
+        selectionButton.Background = !session.Annotating ? Brushes.Teal : new SolidColorBrush(Color.FromRgb(40, 50, 70));
+        stylePanel.Visibility = session.Annotating ? Visibility.Visible : Visibility.Collapsed;
         colorBox.IsEnabled = thicknessBox.IsEnabled = !session.Busy;
         updatingStyle = true;
         foreach (ComboBoxItem item in colorBox.Items) if ((uint)item.Tag == session.Annotations.Rgb) colorBox.SelectedItem = item;
         foreach (ComboBoxItem item in thicknessBox.Items) if ((int)item.Tag == session.Annotations.Thickness) thicknessBox.SelectedItem = item;
         updatingStyle = false;
-        status.Text = string.IsNullOrEmpty(session.Status) && session.RectangleTool ? "拖动画框 · 拖动框线移动 · 拖动控制点缩放" : session.Status;
+        status.Text = !string.IsNullOrEmpty(session.Status) ? session.Status : session.Tool switch
+        {
+            AnnotationKind.Rectangle => "拖动画框 · 拖动框线移动 · 拖动控制点缩放",
+            AnnotationKind.Line or AnnotationKind.Arrow => "拖动绘制 · 拖动线身移动 · 拖动端点调整 · Shift 限制方向",
+            _ => ""
+        };
         status.Visibility = string.IsNullOrEmpty(status.Text) ? Visibility.Collapsed : Visibility.Visible;
         if (toolbar.Visibility == Visibility.Visible) PlaceToolbar();
     }
@@ -163,10 +173,16 @@ internal sealed class OverlayWindow : Window
         if (e.Key == Key.Escape && (!session.Busy || session.Recognizing))
         { e.Handled = true; session.Close(); return; }
         if (session.Busy) { e.Handled = true; return; }
-        if (e.Key == Key.R && Keyboard.Modifiers == ModifierKeys.None)
-        { e.Handled = true; session.SetRectangleTool(true); }
+        if (e.Key == Key.F3 && Keyboard.Modifiers == ModifierKeys.None)
+        { e.Handled = true; session.Pin(); }
+        else if (e.Key == Key.R && Keyboard.Modifiers == ModifierKeys.None)
+        { e.Handled = true; session.SetTool(AnnotationKind.Rectangle); }
+        else if (e.Key == Key.L && Keyboard.Modifiers == ModifierKeys.None)
+        { e.Handled = true; session.SetTool(AnnotationKind.Line); }
+        else if (e.Key == Key.A && Keyboard.Modifiers == ModifierKeys.None)
+        { e.Handled = true; session.SetTool(AnnotationKind.Arrow); }
         else if (e.Key == Key.V && Keyboard.Modifiers == ModifierKeys.None)
-        { e.Handled = true; session.SetRectangleTool(false); }
+        { e.Handled = true; session.SetTool(null); }
         else if (e.Key == Key.Z && Keyboard.Modifiers == ModifierKeys.Control)
         { e.Handled = true; session.UndoAnnotation(); }
         else if (e.Key == Key.Delete && Keyboard.Modifiers == ModifierKeys.None)
@@ -206,7 +222,7 @@ internal sealed class SelectionSurface : FrameworkElement
     {
         if (session.Busy) return;
         var p = Native.CursorPosition();
-        if (!session.RectangleTool && e.ClickCount == 2 && session.Selection.Rectangle.Contains(p))
+        if (!session.Annotating && e.ClickCount == 2 && session.Selection.Rectangle.Contains(p))
         { e.Handled = true; await session.Copy(window); return; }
         Focus(); session.Begin(p, Tolerance); if (session.Dragging) CaptureMouse(); e.Handled = true;
     }
@@ -214,10 +230,11 @@ internal sealed class SelectionSurface : FrameworkElement
     {
         if (session.Busy) return;
         var p = Native.CursorPosition(); session.Move(p, Keyboard.Modifiers.HasFlag(ModifierKeys.Shift));
-        var hit = session.RectangleTool ? session.Annotations.HitTest(p, Tolerance).Hit : session.Selection.HitTest(p, Tolerance);
+        var hit = session.Annotating ? session.Annotations.HitTest(p, Tolerance).Hit : session.Selection.HitTest(p, Tolerance);
         Cursor = hit switch
         {
             SelectionHit.Move => Cursors.SizeAll,
+            SelectionHit.Left or SelectionHit.Right when session.Annotating && session.Annotations.Selected?.Kind != AnnotationKind.Rectangle => Cursors.Cross,
             SelectionHit.Left or SelectionHit.Right => Cursors.SizeWE,
             SelectionHit.Top or SelectionHit.Bottom => Cursors.SizeNS,
             (SelectionHit.Left | SelectionHit.Top) or (SelectionHit.Right | SelectionHit.Bottom) => Cursors.SizeNWSE,
@@ -249,15 +266,15 @@ internal sealed class SelectionSurface : FrameworkElement
             dc.PushTransform(new MatrixTransform(sx, 0, 0, sy, -screen.Left * sx, -screen.Top * sy));
             AnnotationRenderer.Draw(dc, session.Annotations.Items);
             dc.Pop();
-            if (session.RectangleTool && session.Annotations.Selected is { } mark && !session.Dragging)
-                foreach (var handle in RectangleAnnotations.Handles(mark.Rectangle))
+            if (session.Annotating && session.Annotations.Selected is { } mark && !session.Dragging)
+                foreach (var handle in Annotations.Handles(mark))
                 {
                     double hx = (handle.Point.X - screen.Left) * sx, hy = (handle.Point.Y - screen.Top) * sy;
                     dc.DrawRectangle(Brushes.White, new Pen(Brushes.Black, 1), new Rect(hx - 3, hy - 3, 6, 6));
                 }
             dc.Pop();
             dc.DrawRectangle(null, new Pen(Accent, 1.5), r);
-            if (!session.Dragging && !session.RectangleTool)
+            if (!session.Dragging && !session.Annotating)
             {
                 foreach (double x in new[] { r.Left, (r.Left + r.Right) / 2, r.Right })
                     foreach (double y in new[] { r.Top, (r.Top + r.Bottom) / 2, r.Bottom })

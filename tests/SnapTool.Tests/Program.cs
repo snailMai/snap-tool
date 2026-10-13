@@ -18,6 +18,7 @@ internal static class Program
         if (args.Contains("--fixture")) { new Application().Run(new FixtureWindow(args.Contains("--secondary"))); return 0; }
         if (args.Contains("--translation-preview")) { TranslationChecks.RenderPreview(); return 0; }
         if (args.Contains("--rectangle-preview")) { AnnotationChecks.RenderPreview(); return 0; }
+        if (args.Contains("--pin-window-checks")) { PinChecks.CheckWindows(); return 0; }
         if (args.Contains("--screens"))
         { foreach (var screen in Native.Monitors()) Console.WriteLine(screen); return 0; }
         Test("PerMonitorV2 DPI context", () => Equal(true, Native.AreDpiAwarenessContextsEqual(Native.GetThreadDpiAwarenessContext(), new IntPtr(-4))));
@@ -124,6 +125,8 @@ internal static class Program
         OcrChecks.Run(Test);
         TranslationChecks.Run(Test);
         AnnotationChecks.Run(Test);
+        LineAnnotationChecks.Run(Test);
+        PinChecks.Run(Test);
         Console.WriteLine($"{passed} passed, {failed} failed");
         return failed == 0 ? 0 : 1;
     }

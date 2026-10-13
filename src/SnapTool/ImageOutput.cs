@@ -24,10 +24,11 @@ internal static class ImageOutput
         }
     }
 
-    internal static async Task Copy(BitmapSource image)
+    internal static async Task Copy(BitmapSource image, CancellationToken token = default)
     {
         for (int attempt = 0; ; attempt++)
         {
+            token.ThrowIfCancellationRequested();
             try
             {
                 var data = new DataObject();
@@ -35,7 +36,7 @@ internal static class ImageOutput
                 Clipboard.SetDataObject(data, true);
                 return;
             }
-            catch (ExternalException) when (attempt < 3) { await Task.Delay(80); }
+            catch (ExternalException) when (attempt < 3) { await Task.Delay(80, token); }
         }
     }
 

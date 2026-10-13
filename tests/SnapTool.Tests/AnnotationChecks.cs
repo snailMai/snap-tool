@@ -14,9 +14,9 @@ namespace SnapTool.Tests;
 internal static class AnnotationChecks
 {
     private static readonly PixelRect Bounds = new(-100, -50, 300, 250);
-    private static RectangleAnnotations Marked()
+    private static Annotations Marked()
     {
-        var m = new RectangleAnnotations();
+        var m = new Annotations();
         m.Begin(new(0, 0), Bounds, 2); m.End(new(100, 100)); return m;
     }
     private static void Assert(bool condition) { if (!condition) throw new Exception("Annotation assertion failed"); }
@@ -24,24 +24,24 @@ internal static class AnnotationChecks
     {
         test("rectangle reverse drag clamps at negative desktop boundary", () =>
         {
-            var m = new RectangleAnnotations(); m.Begin(new(80, 80), Bounds, 2); m.End(new(-200, -100));
+            var m = new Annotations(); m.Begin(new(80, 80), Bounds, 2); m.End(new(-200, -100));
             Assert(m.Items.Single().Rectangle == new PixelRect(-100, -50, 80, 80));
         });
         test("rectangle ignores outside and empty region", () =>
         {
-            var m = new RectangleAnnotations(); m.Begin(new(300, 0), Bounds, 2); m.End(new(50, 50));
+            var m = new Annotations(); m.Begin(new(300, 0), Bounds, 2); m.End(new(50, 50));
             m.Begin(new(0, 0), default, 2); Assert(m.Items.Count == 0 && !m.Dragging && !m.CanUndo);
         });
         test("rectangle click and one-pixel gestures create no history", () =>
         {
-            var m = new RectangleAnnotations(); m.Begin(new(0, 0), Bounds, 2); m.End(new(0, 0));
+            var m = new Annotations(); m.Begin(new(0, 0), Bounds, 2); m.End(new(0, 0));
             m.Begin(new(0, 0), Bounds, 2); m.End(new(1, 10)); Assert(m.Items.Count == 0 && !m.CanUndo);
         });
         test("rectangle shift constrains new shape in all quadrants", () =>
         {
             foreach (var p in new[] { new PixelPoint(90, 30), new(-90, 30), new(90, -30), new(-90, -30) })
             {
-                var m = new RectangleAnnotations(); m.Begin(new(0, 0), Bounds, 2); m.End(p, true);
+                var m = new Annotations(); m.Begin(new(0, 0), Bounds, 2); m.End(p, true);
                 Assert(m.Items.Single().Rectangle.Width == 30 && m.Items.Single().Rectangle.Height == 30);
             }
         });
@@ -148,16 +148,16 @@ internal static class AnnotationChecks
         {
             int calls = 0;
             var s = Session(image => { calls++; Assert(Pixel(image, 100, 50) == 0xFFFFFF); });
-            s.SetRectangleTool(true); s.Begin(new(0, 0), 2); s.Move(new(100, 100));
-            s.SetRectangleTool(false); await s.RecognizeText();
-            Assert(s.RectangleTool && calls == 0 && s.Selection.Rectangle == Bounds);
+            s.SetTool(AnnotationKind.Rectangle); s.Begin(new(0, 0), 2); s.Move(new(100, 100));
+            s.SetTool(null); await s.RecognizeText();
+            Assert(s.Annotating && calls == 0 && s.Selection.Rectangle == Bounds);
             s.End(new(100, 100)); Assert(Pixel(s.CreateOutput(), 100, 50) == 0xFF4545);
             await s.RecognizeText(); Assert(calls == 1); s.Close();
         }));
         test("selection adjustment preserves annotation desktop position", () =>
         {
-            var s = Session(); s.SetRectangleTool(true); s.Begin(new(0, 0), 2); s.End(new(100, 100));
-            s.SetRectangleTool(false); s.Begin(new(300, 250), 2); s.End(new(60, 60));
+            var s = Session(); s.SetTool(AnnotationKind.Rectangle); s.Begin(new(0, 0), 2); s.End(new(100, 100));
+            s.SetTool(null); s.Begin(new(300, 250), 2); s.End(new(60, 60));
             Assert(s.Selection.Rectangle == new PixelRect(-100, -50, 60, 60));
             Assert(s.Annotations.Items.Single().Rectangle == new PixelRect(0, 0, 100, 100));
             Assert(Pixel(s.CreateOutput(), 100, 50) == 0xFF4545); s.Close();
@@ -169,13 +169,13 @@ internal static class AnnotationChecks
             {
                 var toolbar = Toolbar(window);
                 Button Find(string label) => Descendants(toolbar).OfType<Button>().Single(b => Equals(b.Content, label));
-                Find("矩形").RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); Assert(s.RectangleTool);
+                Find("矩形").RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); Assert(s.Annotating);
                 s.Begin(new(0, 0), 2); s.End(new(100, 100));
                 var combos = Descendants(toolbar).OfType<ComboBox>().ToArray(); combos[0].SelectedIndex = 3;
                 Assert(s.Annotations.Items.Single().Rgb == 0x409CFF);
-                Find("删除框").RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); Assert(s.Annotations.Items.Count == 0);
+                Find("删除").RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); Assert(s.Annotations.Items.Count == 0);
                 Find("撤销").RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); Assert(s.Annotations.Items.Count == 1);
-                Find("调整选区").RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); Assert(!s.RectangleTool);
+                Find("调整选区").RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); Assert(!s.Annotating);
             }
             finally { window.Close(); s.Close(); }
         });
@@ -205,8 +205,10 @@ internal static class AnnotationChecks
         var snapshot = new DesktopSnapshot(screen, [screen], OcrChecks.Sample(false, 1100, 650));
         var s = new CaptureSession(snapshot, () => { }, (_, _) => { }, (_, _) => Task.FromResult(""));
         s.Selection.Begin(new(10, 5), 0); s.Selection.End(new(1010, 440));
-        s.SetRectangleTool(true); s.Begin(new(18, 80), 3); s.End(new(480, 130));
+        s.SetTool(AnnotationKind.Rectangle); s.Begin(new(18, 80), 3); s.End(new(480, 130));
         s.Annotations.Deselect(); s.SetAnnotationStyle(0x409CFF, 5); s.Begin(new(18, 145), 3); s.End(new(450, 205));
+        s.SetTool(AnnotationKind.Line); s.SetAnnotationStyle(0x38D996, 3); s.Begin(new(40, 320), 3); s.End(new(950, 320));
+        s.SetTool(AnnotationKind.Arrow); s.SetAnnotationStyle(0xFFD447, 5); s.Begin(new(850, 270), 3); s.End(new(650, 140));
         var window = new OverlayWindow(s, screen);
         string dir = Path.Combine(Program.FindRoot(), ".tmp", "rectangle-preview"); Directory.CreateDirectory(dir);
         try
