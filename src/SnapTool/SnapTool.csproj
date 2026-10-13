@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- WPF requires DPI in the manifest before its module initialization. WinForms is used only for the tray. -->
+    <NoWarn>$(NoWarn);WFO0003</NoWarn>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <AssemblyName>SnapTool</AssemblyName>
+    <Version>0.4.0</Version>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+    <Description>Windows region capture with Ctrl+F2</Description>
+  </PropertyGroup>
+  <ItemGroup><ProjectReference Include="../SnapTool.Core/SnapTool.Core.csproj" /></ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="RapidOcrNet" Version="4.2.0" ExcludeAssets="contentFiles;build;buildTransitive" />
+    <Content Include="../../models/v5/*" Link="models/v5/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../licenses/*" Link="licenses/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>
