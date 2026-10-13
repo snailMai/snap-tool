@@ -2,6 +2,8 @@
 
 Windows x64 桌面区域截图工具。使用 C#、WPF 与 Windows 原生 API，支持矩形标注、本地离线中英文 OCR 和有道在线文本翻译。
 
+源码仓库：[snailMai/snap-tool](https://github.com/snailMai/snap-tool) 。
+
 ## 使用
 
 按下方“开发与构建”生成便携包后，运行 `dist/SnapTool/SnapTool.exe`，程序驻留系统托盘。
