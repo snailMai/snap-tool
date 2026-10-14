@@ -18,19 +18,13 @@ internal static class AnnotationRenderer
             if (mark.Kind != AnnotationKind.Rectangle)
             {
                 if (mark.Length < 2) continue;
-                var start = new Point(mark.Start.X, mark.Start.Y); var end = new Point(mark.End.X, mark.End.Y);
-                var pen = new Pen(brush, mark.Thickness);
-                if (mark.Kind == AnnotationKind.Arrow)
+                var points = mark.ArrowOutline(); var arrow = new StreamGeometry();
+                using (var context = arrow.Open())
                 {
-                    var points = mark.ArrowOutline(); var arrow = new StreamGeometry();
-                    using (var context = arrow.Open())
-                    {
-                        context.BeginFigure(start, true, true);
-                        for (int i = 1; i < points.Length; i++) context.LineTo(new Point(points[i].X, points[i].Y), true, false);
-                    }
-                    dc.DrawGeometry(brush, null, arrow);
+                    context.BeginFigure(new Point(mark.Start.X, mark.Start.Y), true, true);
+                    for (int i = 1; i < points.Length; i++) context.LineTo(new Point(points[i].X, points[i].Y), true, false);
                 }
-                else dc.DrawLine(pen, start, end);
+                dc.DrawGeometry(brush, null, arrow);
                 continue;
             }
             if (r.IsEmpty) continue;

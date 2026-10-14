@@ -164,7 +164,7 @@ internal static class AnnotationChecks
         });
         test("all annotation tools allow direct capture edge and corner resize", () =>
         {
-            foreach (var kind in new[] { AnnotationKind.Rectangle, AnnotationKind.Line, AnnotationKind.Arrow })
+            foreach (var kind in new[] { AnnotationKind.Rectangle, AnnotationKind.Arrow })
                 foreach (var p in new[] { new PixelPoint(-100, -50), new(100, -50), new(300, -50), new(-100, 100),
                     new(300, 100), new(-100, 250), new(100, 250), new(300, 250) })
                 {
@@ -191,7 +191,7 @@ internal static class AnnotationChecks
         });
         test("interior annotation movement and handle editing retain capture bounds", () =>
         {
-            foreach (var kind in new[] { AnnotationKind.Rectangle, AnnotationKind.Line, AnnotationKind.Arrow })
+            foreach (var kind in new[] { AnnotationKind.Rectangle, AnnotationKind.Arrow })
             {
                 var s = Session(); s.SetTool(kind); s.Begin(new(0, 0), 2); s.End(new(100, 100));
                 var body = kind == AnnotationKind.Rectangle ? new PixelPoint(0, 40) : new PixelPoint(40, 40);
@@ -204,15 +204,15 @@ internal static class AnnotationChecks
         });
         test("resize gesture blocks tool changes and preserves existing annotations", () =>
         {
-            var s = Session(); s.SetTool(AnnotationKind.Line); s.Begin(new(0, 0), 2); s.End(new(100, 0));
+            var s = Session(); s.SetTool(AnnotationKind.Arrow); s.Begin(new(0, 0), 2); s.End(new(100, 0));
             var mark = s.Annotations.Items.Single(); s.Begin(new(300, 250), 2);
-            s.ToggleTool(AnnotationKind.Line); s.SetTool(AnnotationKind.Arrow); s.SetAnnotationStyle(0, 8);
+            s.ToggleTool(AnnotationKind.Arrow); s.SetTool(AnnotationKind.Rectangle); s.SetAnnotationStyle(0, 8);
             s.Move(new(50, 50)); s.End(new(60, 60));
-            Assert(s.Tool == AnnotationKind.Line && s.Annotations.Items.Single() == mark && s.Selection.Rectangle == new PixelRect(-100, -50, 60, 60)); s.Close();
+            Assert(s.Tool == AnnotationKind.Arrow && s.Annotations.Items.Single() == mark && s.Selection.Rectangle == new PixelRect(-100, -50, 60, 60)); s.Close();
         });
         test("toggle each drawing tool restores interior capture movement", () =>
         {
-            foreach (var kind in new[] { AnnotationKind.Rectangle, AnnotationKind.Line, AnnotationKind.Arrow })
+            foreach (var kind in new[] { AnnotationKind.Rectangle, AnnotationKind.Arrow })
             {
                 var s = Session(); s.Begin(new(300, 250), 2); s.End(new(200, 150));
                 s.ToggleTool(kind); Assert(s.Tool == kind); s.ToggleTool(kind); Assert(!s.Annotating);
@@ -284,7 +284,7 @@ internal static class AnnotationChecks
         s.Selection.Begin(new(10, 5), 0); s.Selection.End(new(1010, 440));
         s.SetTool(AnnotationKind.Rectangle); s.Begin(new(18, 80), 3); s.End(new(480, 130));
         s.Annotations.Deselect(); s.SetAnnotationStyle(0x409CFF, 5); s.Begin(new(18, 145), 3); s.End(new(450, 205));
-        s.SetTool(AnnotationKind.Line); s.SetAnnotationStyle(0x38D996, 3); s.Begin(new(40, 320), 3); s.End(new(950, 320));
+        s.SetTool(AnnotationKind.Arrow); s.SetAnnotationStyle(0x38D996, 3); s.Begin(new(40, 320), 3); s.End(new(950, 320));
         s.SetTool(AnnotationKind.Arrow); s.SetAnnotationStyle(0xFFD447, 5); s.Begin(new(850, 270), 3); s.End(new(650, 140));
         var window = new OverlayWindow(s, screen);
         string dir = Path.Combine(Program.FindRoot(), ".tmp", "rectangle-preview"); Directory.CreateDirectory(dir);

@@ -1,6 +1,6 @@
 namespace SnapTool.Core;
 
-public enum AnnotationKind { Rectangle, Line, Arrow }
+public enum AnnotationKind { Rectangle, Arrow }
 
 public sealed record Annotation(AnnotationKind Kind, PixelPoint Start, PixelPoint End, uint Rgb, int Thickness)
 {
@@ -71,11 +71,7 @@ public sealed class Annotations
             if (items[i].Kind != AnnotationKind.Rectangle)
             {
                 var mark = items[i];
-                if (mark.Kind == AnnotationKind.Arrow)
-                {
-                    if (HitOutline(p, mark.ArrowOutline(), tolerance)) return (i, SelectionHit.Move);
-                }
-                else if (Distance(p, (mark.Start.X, mark.Start.Y), (mark.End.X, mark.End.Y)) <= hitWidth) return (i, SelectionHit.Move);
+                if (HitOutline(p, mark.ArrowOutline(), tolerance)) return (i, SelectionHit.Move);
                 continue;
             }
             if (p.X < r.Left - hitWidth || p.X > r.Right + hitWidth || p.Y < r.Top - hitWidth || p.Y > r.Bottom + hitWidth) continue;

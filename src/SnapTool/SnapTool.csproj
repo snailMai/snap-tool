@@ -11,7 +11,7 @@
     <NoWarn>$(NoWarn);WFO0003</NoWarn>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyName>SnapTool</AssemblyName>
-    <Version>0.6.4</Version>
+    <Version>0.6.6</Version>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
     <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
     <Description>Windows region capture with Ctrl+F2</Description>

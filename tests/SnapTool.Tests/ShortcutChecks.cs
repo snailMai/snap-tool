@@ -49,9 +49,9 @@ internal static class ShortcutChecks
                 finally { window.Close(); }
             }
         }));
-        test("Ctrl+V and F3 pin annotated selection without copying or disabling tool", () => OcrChecks.Pump(async () =>
+        test("Ctrl+T and F3 pin annotated selection without copying or disabling tool", () => OcrChecks.Pump(async () =>
         {
-            foreach (var (key, modifiers) in new[] { (Key.V, ModifierKeys.Control), (Key.F3, ModifierKeys.None) })
+            foreach (var (key, modifiers) in new[] { (Key.T, ModifierKeys.Control), (Key.F3, ModifierKeys.None) })
             {
                 int copies = 0, pins = 0, closed = 0; BitmapSource? pinned = null;
                 var s = Session(_ => { copies++; return Task.CompletedTask; }, (image, rect) =>
@@ -66,16 +66,19 @@ internal static class ShortcutChecks
                 finally { window.Close(); }
             }
         }));
-        test("V Shift+C and extra modifiers stay distinct from copy and pin", () => OcrChecks.Pump(async () =>
+        test("Shift+C Shift+T and extra modifiers stay distinct from copy and pin", () => OcrChecks.Pump(async () =>
         {
             int copies = 0, pins = 0, ocr = 0;
             var s = Session(_ => { copies++; return Task.CompletedTask; }, (_, _) => pins++, ocr: () => ocr++);
             var window = new OverlayWindow(s, Bounds);
             try
             {
-                await Press(window, Key.V, ModifierKeys.None); Assert(!s.Annotating);
                 await Press(window, Key.C, ModifierKeys.Shift); Assert(ocr == 1);
-                foreach (var key in new[] { Key.C, Key.V })
+                await Press(window, Key.T, ModifierKeys.Shift); Assert(ocr == 2);
+                s.SetTool(AnnotationKind.Arrow);
+                var oldPinKey = KeyEvent(window, Key.V); await window.HandleKey(oldPinKey, ModifierKeys.Control);
+                Assert(!oldPinKey.Handled && s.Tool == AnnotationKind.Arrow);
+                foreach (var key in new[] { Key.C, Key.T, Key.V })
                 {
                     var e = KeyEvent(window, key); await window.HandleKey(e, ModifierKeys.Control | ModifierKeys.Shift); Assert(!e.Handled);
                     await Press(window, key, ModifierKeys.Alt);
@@ -84,16 +87,33 @@ internal static class ShortcutChecks
             }
             finally { window.Close(); }
         }));
-        test("Ctrl+C and Ctrl+V ignore dragging and empty selection", () => OcrChecks.Pump(async () =>
+        test("removed R L A V shortcuts leave every annotation mode unchanged", () => OcrChecks.Pump(async () =>
+        {
+            var s = Session(); var window = new OverlayWindow(s, Bounds);
+            try
+            {
+                foreach (var kind in new AnnotationKind?[] { null, AnnotationKind.Rectangle, AnnotationKind.Arrow })
+                {
+                    s.SetTool(kind);
+                    foreach (var key in new[] { Key.R, Key.L, Key.A, Key.V })
+                    {
+                        var e = KeyEvent(window, key); await window.HandleKey(e, ModifierKeys.None);
+                        Assert(!e.Handled && s.Tool == kind);
+                    }
+                }
+            }
+            finally { window.Close(); s.Close(); }
+        }));
+        test("Ctrl+C and Ctrl+T ignore dragging and empty selection", () => OcrChecks.Pump(async () =>
         {
             int outputs = 0; var s = Session(_ => { outputs++; return Task.CompletedTask; }, (_, _) => outputs++);
             var window = new OverlayWindow(s, Bounds);
             try
             {
                 s.Begin(new(300, 200), 2); s.Move(new(200, 150));
-                await Press(window, Key.C, ModifierKeys.Control); await Press(window, Key.V, ModifierKeys.Control); Assert(outputs == 0);
+                await Press(window, Key.C, ModifierKeys.Control); await Press(window, Key.T, ModifierKeys.Control); Assert(outputs == 0);
                 s.End(new(20, 20)); Assert(s.Selection.Rectangle.IsEmpty);
-                await Press(window, Key.C, ModifierKeys.Control); await Press(window, Key.V, ModifierKeys.Control); Assert(outputs == 0);
+                await Press(window, Key.C, ModifierKeys.Control); await Press(window, Key.T, ModifierKeys.Control); Assert(outputs == 0);
             }
             finally { window.Close(); }
         }));
@@ -105,7 +125,7 @@ internal static class ShortcutChecks
             {
                 var e = KeyEvent(window, Key.C); var task = window.HandleKey(e, ModifierKeys.Control);
                 Assert(e.Handled && s.Busy);
-                await Press(window, Key.C, ModifierKeys.Control); await Press(window, Key.V, ModifierKeys.Control);
+                await Press(window, Key.C, ModifierKeys.Control); await Press(window, Key.T, ModifierKeys.Control);
                 Assert(copies == 1 && pins == 0); pending.SetResult(); await task;
             }
             finally { pending.TrySetResult(); window.Close(); }
