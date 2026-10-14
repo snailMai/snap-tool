@@ -10,6 +10,25 @@ namespace SnapTool;
 
 internal static class ImageOutput
 {
+    internal static Task CopyGif(string path, CancellationToken token) =>
+        CopyGifWithRetry(path, token, data => Clipboard.SetDataObject(data, true));
+
+    internal static async Task CopyGifWithRetry(string path, CancellationToken token, Action<DataObject> write)
+    {
+        token.ThrowIfCancellationRequested();
+        if (!File.Exists(path)) throw new FileNotFoundException("录屏临时文件不存在。", path);
+        var data = new DataObject();
+        data.SetFileDropList(new System.Collections.Specialized.StringCollection { Path.GetFullPath(path) });
+        using var effect = new MemoryStream(BitConverter.GetBytes(1)); // DROPEFFECT_COPY, never move the cache.
+        data.SetData("Preferred DropEffect", effect);
+        for (int attempt = 0; ; attempt++)
+        {
+            token.ThrowIfCancellationRequested();
+            try { write(data); return; }
+            catch (ExternalException) when (attempt < 3) { await Task.Delay(80, token); }
+        }
+    }
+
     internal static Task CopyText(string text, CancellationToken token) =>
         CopyTextWithRetry(text, token, value => Clipboard.SetText(value, TextDataFormat.UnicodeText));
 

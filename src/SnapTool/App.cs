@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Drawing;
 using System.Linq;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Media.Imaging;
@@ -21,6 +22,9 @@ internal sealed class App : Application
     private Icon? icon;
     private CaptureSession? session;
     private ScrollCaptureWindow? scrollCapture;
+    private RecordingWindow? recording;
+    private bool exiting;
+    private bool sessionNotifications;
     private bool registered;
     private readonly OcrService ocr = new();
     private readonly TranslationSettings translationSettings = new();
@@ -36,6 +40,7 @@ internal sealed class App : Application
         {
             app.session?.Close();
             app.scrollCapture?.Close();
+            if (app.recording != null) _ = app.recording.EndForSystemChange();
             MessageBox.Show("操作失败，请重试。\n" + e.Exception.Message, "Snap Tool", MessageBoxButton.OK, MessageBoxImage.Error);
             e.Handled = true;
         };
@@ -60,10 +65,11 @@ internal sealed class App : Application
         menu.Items.Add("翻译设置…", null, (_, _) => ShowTranslationSettings(null));
         menu.Items.Add("关闭全部贴图", null, (_, _) => pins.CloseAll());
         menu.Items.Add(new Forms.ToolStripSeparator());
-        menu.Items.Add("退出", null, (_, _) => Shutdown());
+        menu.Items.Add("退出", null, async (_, _) => await ExitSafely());
         tray = new Forms.NotifyIcon { Icon = icon, Text = "Snap Tool · Ctrl+F2 截图", ContextMenuStrip = menu, Visible = true };
         tray.DoubleClick += (_, _) => QueueCapture();
         RegisterHotkey(false);
+        sessionNotifications = Native.WTSRegisterSessionNotification(source.Handle, 0);
         if (registered) Notify("已准备好", "按 Ctrl+F2 框选截图；右键托盘图标可退出。");
         if (capture) QueueCapture();
     }
@@ -106,18 +112,20 @@ internal sealed class App : Application
         if (message == 0x0312 && wParam.ToInt32() == HotkeyId)
         {
             handled = true;
-            if (scrollCapture != null) _ = scrollCapture.Finish();
+            if (recording != null) _ = recording.Stop();
+            else if (scrollCapture != null) _ = scrollCapture.Finish();
             else QueueCapture();
         }
-        else if (message == 0x007E) { session?.Close(); scrollCapture?.Close(); pins.Reposition(); } // Display topology changed.
-        else if (message == 0x0011) { session?.Close(); Shutdown(); } // Session ending.
+        else if (message == 0x007E) { session?.Close(); scrollCapture?.Close(); if (recording != null) _ = recording.EndForSystemChange(); pins.Reposition(); }
+        else if (message == 0x02B1 && wParam.ToInt32() == 7) { if (recording != null) _ = recording.EndForSystemChange(); } // Session locked.
+        else if (message == 0x0011) { handled = true; _ = ExitSafely(); return new IntPtr(1); }
         return IntPtr.Zero;
     }
 
     private bool queued;
     private void QueueCapture()
     {
-        if (session != null || scrollCapture != null || queued) return;
+        if (session != null || scrollCapture != null || recording != null || queued || exiting) return;
         queued = true;
         Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(async () =>
         {
@@ -130,12 +138,13 @@ internal sealed class App : Application
                 var windowTargets = WindowTargets.Capture();
                 var snapshot = DesktopSnapshot.Capture();
                 pins.Suspend();
-                session = new CaptureSession(snapshot, () => { session = null; if (scrollCapture == null) pins.Resume(); },
+                session = new CaptureSession(snapshot, () => { session = null; if (scrollCapture == null && recording == null) pins.Resume(); },
                     (title, text) => Notify(title, text), ocr.Recognize, showTranslation: ShowTranslation,
                     showPin: (image, rectangle) => pins.Add(image, rectangle),
                     windowTargets: windowTargets.Select(target => target.Bounds).ToArray(),
                     showScroll: (region, image) => ShowScrollCapture(region, image,
-                        windowTargets.FirstOrDefault(w => w.Bounds.Contains(new(region.Left + region.Width / 2, region.Top + region.Height / 2)))));
+                        windowTargets.FirstOrDefault(w => w.Bounds.Contains(new(region.Left + region.Width / 2, region.Top + region.Height / 2)))),
+                    showRecording: ShowRecording);
                 session.Show();
             }
             catch (Exception ex)
@@ -148,6 +157,24 @@ internal sealed class App : Application
     }
 
     private void Notify(string title, string text) => tray?.ShowBalloonTip(2000, title, text, Forms.ToolTipIcon.Info);
+
+    private bool ShowRecording(PixelRect region)
+    {
+        if (!sessionNotifications) throw new InvalidOperationException("无法监听锁屏状态，请退出后重新启动再录屏。");
+        if (!global::Windows.Graphics.Capture.GraphicsCaptureSession.IsSupported()) throw new InvalidOperationException("当前系统不支持屏幕录制。");
+        var window = new RecordingWindow(region, Notify); recording = window;
+        window.Closed += (_, _) => { if (recording == window) recording = null; if (session == null) pins.Resume(); };
+        try { window.Start(); return true; }
+        catch { window.Close(); throw; }
+    }
+
+    private async Task ExitSafely()
+    {
+        if (exiting) return;
+        exiting = true; session?.Close(); scrollCapture?.Close();
+        if (recording != null) await recording.EndForSystemChange();
+        Shutdown();
+    }
 
     private void ShowScrollCapture(PixelRect region, BitmapSource first, WindowTarget target)
     {
@@ -188,6 +215,7 @@ internal sealed class App : Application
         session?.Close();
         ocr.Dispose();
         translator.Dispose();
+        if (source != null) Native.WTSUnRegisterSessionNotification(source.Handle);
         if (registered && source != null) Native.UnregisterHotKey(source.Handle, HotkeyId);
         source?.Dispose(); source = null;
         if (tray != null) { tray.Visible = false; tray.ContextMenuStrip?.Dispose(); tray.Dispose(); }

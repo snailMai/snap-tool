@@ -1,12 +1,16 @@
 namespace SnapTool.Core;
 
-public enum AnnotationKind { Rectangle, Arrow }
+public enum AnnotationKind { Rectangle, Arrow, Number, Mosaic }
 
 public sealed record Annotation(AnnotationKind Kind, PixelPoint Start, PixelPoint End, uint Rgb, int Thickness)
 {
+    public int Number { get; init; }
+    public int NumberRadius => 8 + Thickness * 2;
     public Annotation(PixelRect rectangle, uint rgb, int thickness)
         : this(AnnotationKind.Rectangle, new(rectangle.Left, rectangle.Top), new(rectangle.Right, rectangle.Bottom), rgb, thickness) { }
-    public PixelRect Rectangle => PixelRect.Between(Start, End);
+    public PixelRect Rectangle => Kind == AnnotationKind.Number
+        ? new(Start.X - NumberRadius, Start.Y - NumberRadius, Start.X + NumberRadius, Start.Y + NumberRadius)
+        : PixelRect.Between(Start, End);
     public double Length => Math.Sqrt(Math.Pow(End.X - Start.X, 2) + Math.Pow(End.Y - Start.Y, 2));
 
     public (double X, double Y)[] ArrowOutline()
@@ -39,11 +43,18 @@ public sealed class Annotations
     public bool CanUndo => Dragging || history.Count > 0;
     public uint Rgb { get; private set; } = 0xFF4545;
     public int Thickness { get; private set; } = 8;
+    public int MosaicSize { get; private set; } = 30;
+    public int NextNumber => checked(items.Where(m => m.Kind == AnnotationKind.Number).Select(m => m.Number).DefaultIfEmpty(0).Max() + 1);
 
     public void Deselect() { if (!Dragging) SelectedIndex = -1; }
 
     public static IEnumerable<(PixelPoint Point, SelectionHit Hit)> Handles(Annotation mark) =>
-        mark.Kind == AnnotationKind.Rectangle ? Handles(mark.Rectangle) :
+        mark.Kind == AnnotationKind.Number ? new[] {
+            (new PixelPoint(mark.Rectangle.Left, mark.Rectangle.Top), SelectionHit.Move),
+            (new PixelPoint(mark.Rectangle.Right, mark.Rectangle.Top), SelectionHit.Move),
+            (new PixelPoint(mark.Rectangle.Left, mark.Rectangle.Bottom), SelectionHit.Move),
+            (new PixelPoint(mark.Rectangle.Right, mark.Rectangle.Bottom), SelectionHit.Move) } :
+        mark.Kind is AnnotationKind.Rectangle or AnnotationKind.Mosaic ? Handles(mark.Rectangle) :
         [(mark.Start, SelectionHit.Left), (mark.End, SelectionHit.Right)];
 
     public static IEnumerable<(PixelPoint Point, SelectionHit Hit)> Handles(PixelRect r)
@@ -68,6 +79,18 @@ public sealed class Annotations
         {
             var r = items[i].Rectangle;
             int hitWidth = Math.Max(tolerance, items[i].Thickness);
+            if (items[i].Kind == AnnotationKind.Mosaic)
+            {
+                if (r.Contains(p)) return (i, SelectionHit.Move);
+                continue;
+            }
+            if (items[i].Kind == AnnotationKind.Number)
+            {
+                var mark = items[i];
+                if (Math.Pow(p.X - mark.Start.X, 2) + Math.Pow(p.Y - mark.Start.Y, 2) <= Math.Pow(mark.NumberRadius + tolerance, 2))
+                    return (i, SelectionHit.Move);
+                continue;
+            }
             if (items[i].Kind != AnnotationKind.Rectangle)
             {
                 var mark = items[i];
@@ -110,18 +133,26 @@ public sealed class Annotations
         if (SelectedIndex < 0)
         {
             SelectedIndex = items.Count;
-            items.Add(new(kind, p, p, Rgb, Thickness));
+            items.Add(new(kind, p, p, Rgb, kind == AnnotationKind.Mosaic ? MosaicSize : Thickness) { Number = kind == AnnotationKind.Number ? NextNumber : 0 });
         }
         originalMark = items[SelectedIndex];
         original = items[SelectedIndex].Rectangle;
-        Rgb = items[SelectedIndex].Rgb; Thickness = items[SelectedIndex].Thickness;
+        if (items[SelectedIndex].Kind == AnnotationKind.Mosaic) MosaicSize = items[SelectedIndex].Thickness;
+        else { Rgb = items[SelectedIndex].Rgb; Thickness = items[SelectedIndex].Thickness; }
     }
 
     public void Update(PixelPoint p, bool square = false)
     {
         if (!Dragging) return;
         p = bounds.Clamp(p);
-        if (originalMark.Kind != AnnotationKind.Rectangle)
+        if (originalMark.Kind == AnnotationKind.Number)
+        {
+            var delta = MoveDelta(p);
+            var center = operation == SelectionHit.Move ? new PixelPoint(originalMark.Start.X + delta.X, originalMark.Start.Y + delta.Y) : p;
+            items[SelectedIndex] = originalMark with { Start = center, End = center };
+            return;
+        }
+        if (originalMark.Kind is not (AnnotationKind.Rectangle or AnnotationKind.Mosaic))
         {
             PixelPoint start = originalMark.Start, end = originalMark.End;
             if (operation == SelectionHit.Move)
@@ -194,17 +225,19 @@ public sealed class Annotations
         if (before == null) return;
         Update(p, square);
         var saved = before; before = null;
-        if (Selected!.Kind == AnnotationKind.Rectangle
-            ? Selected.Rectangle.Width < 2 || Selected.Rectangle.Height < 2 : Selected.Length < 2)
+        if (Selected!.Kind is AnnotationKind.Rectangle or AnnotationKind.Mosaic
+            ? Selected.Rectangle.Width < 2 || Selected.Rectangle.Height < 2 : Selected.Kind == AnnotationKind.Arrow && Selected.Length < 2)
         { Restore(saved); return; }
         if (!items.SequenceEqual(saved)) history.Push(saved);
     }
 
-    public void SetStyle(uint rgb, int thickness)
+    public void SetStyle(uint rgb, int thickness, AnnotationKind kind = AnnotationKind.Rectangle)
     {
-        if (rgb > 0xFFFFFF || thickness < 1 || thickness > 12) throw new ArgumentOutOfRangeException(nameof(thickness));
+        bool mosaic = (Selected?.Kind ?? kind) == AnnotationKind.Mosaic;
+        if (rgb > 0xFFFFFF || thickness < 1 || thickness > (mosaic ? 30 : 12)) throw new ArgumentOutOfRangeException(nameof(thickness));
         if (Dragging) return;
-        Rgb = rgb; Thickness = thickness;
+        if (mosaic) MosaicSize = thickness;
+        else { Rgb = rgb; Thickness = thickness; }
         if (Selected is not { } selected || (selected.Rgb == rgb && selected.Thickness == thickness)) return;
         history.Push(items.ToArray()); items[SelectedIndex] = selected with { Rgb = rgb, Thickness = thickness };
     }

@@ -20,11 +20,14 @@ internal sealed class OverlayWindow : Window
     private readonly Canvas canvas;
     private readonly Border toolbar;
     private readonly List<Button> outputButtons = [];
-    private Button rectangleButton = null!, arrowButton = null!, undoButton = null!;
+    private Button rectangleButton = null!, arrowButton = null!, numberButton = null!, mosaicButton = null!, undoButton = null!;
+    private TextBlock colorLabel = null!;
+    private TextBlock thicknessLabel = null!;
     private readonly ComboBox colorBox = new() { Width = 82, Margin = new Thickness(4), VerticalContentAlignment = VerticalAlignment.Center };
     private readonly ComboBox thicknessBox = new() { Width = 70, Margin = new Thickness(4), VerticalContentAlignment = VerticalAlignment.Center };
     private StackPanel stylePanel = null!;
     private bool updatingStyle;
+    private bool mosaicWidths;
     private static readonly Brush ToolBackground = CreateToolBackground();
 
     private static Brush CreateToolBackground()
@@ -72,6 +75,7 @@ internal sealed class OverlayWindow : Window
         outputButtons.Add(AddButton(panel, "复制", "复制图片，Ctrl+C 或 Enter", async () => await session.Copy(this), true));
         outputButtons.Add(AddButton(panel, "贴图", "当前选区置顶贴图，Ctrl+T 或 F3", session.Pin));
         outputButtons.Add(AddButton(panel, "长截图", "手动向下滚动并拼接截图", session.StartScroll));
+        outputButtons.Add(AddButton(panel, "录屏", "录制选区为 GIF 动图；完成或 Ctrl+F2 复制，取消放弃", session.StartRecording));
         outputButtons.Add(AddButton(panel, "OCR", "识别文字，Shift+C", async () => await session.RecognizeText()));
         outputButtons.Add(AddButton(panel, "翻译", "有道文本翻译，Shift+T", async () => await session.RecognizeText(true)));
         outputButtons.Add(AddButton(panel, "保存", "保存 PNG，Ctrl+S", () => session.Save(this)));
@@ -79,13 +83,17 @@ internal sealed class OverlayWindow : Window
         var tools = new StackPanel { Orientation = Orientation.Horizontal };
         rectangleButton = AddButton(tools, "矩形", "绘制矩形；Shift 正方形；再次点击退出绘制", () => session.ToggleTool(AnnotationKind.Rectangle));
         arrowButton = AddButton(tools, "箭头", "绘制箭头；Shift 限制方向；再次点击退出绘制", () => session.ToggleTool(AnnotationKind.Arrow));
+        numberButton = AddButton(tools, "序号", "点击添加自增数字，从 1 开始；拖动已有序号移动；再次点击退出", () => session.ToggleTool(AnnotationKind.Number));
+        mosaicButton = AddButton(tools, "马赛克", "拖动框选马赛克；拖动区域移动；控制点缩放；再次点击退出", () => session.ToggleTool(AnnotationKind.Mosaic));
         undoButton = AddButton(tools, "撤销", "撤销标注，Ctrl+Z", session.UndoAnnotation);
-        outputButtons.AddRange([rectangleButton, arrowButton, undoButton]);
+        outputButtons.AddRange([rectangleButton, arrowButton, numberButton, mosaicButton, undoButton]);
         stylePanel = new StackPanel { Orientation = Orientation.Horizontal, Visibility = Visibility.Collapsed };
-        stylePanel.Children.Add(new TextBlock { Text = "颜色", Foreground = Brushes.White, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 2, 0) });
+        colorLabel = new TextBlock { Text = "颜色", Foreground = Brushes.White, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 2, 0) };
+        stylePanel.Children.Add(colorLabel);
         foreach (var color in Colors) colorBox.Items.Add(new ComboBoxItem { Content = color.Name, Tag = color.Rgb });
         colorBox.SelectedIndex = 0; stylePanel.Children.Add(colorBox);
-        stylePanel.Children.Add(new TextBlock { Text = "粗细", Foreground = Brushes.White, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 2, 0) });
+        thicknessLabel = new TextBlock { Text = "粗细", Foreground = Brushes.White, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 2, 0) };
+        stylePanel.Children.Add(thicknessLabel);
         foreach (int width in new[] { 2, 3, 5, 8 }) thicknessBox.Items.Add(new ComboBoxItem { Content = width + " px", Tag = width });
         foreach (ComboBoxItem item in thicknessBox.Items) if ((int)item.Tag == session.Annotations.Thickness) thicknessBox.SelectedItem = item;
         stylePanel.Children.Add(thicknessBox);
@@ -159,16 +167,32 @@ internal sealed class OverlayWindow : Window
         undoButton.IsEnabled = !session.Busy && session.Annotations.CanUndo;
         rectangleButton.Background = session.Tool == AnnotationKind.Rectangle ? Brushes.Teal : ToolBackground;
         arrowButton.Background = session.Tool == AnnotationKind.Arrow ? Brushes.Teal : ToolBackground;
+        numberButton.Background = session.Tool == AnnotationKind.Number ? Brushes.Teal : ToolBackground;
+        mosaicButton.Background = session.Tool == AnnotationKind.Mosaic ? Brushes.Teal : ToolBackground;
         stylePanel.Visibility = session.Annotating ? Visibility.Visible : Visibility.Collapsed;
         colorBox.IsEnabled = thicknessBox.IsEnabled = !session.Busy;
         updatingStyle = true;
+        var styleKind = session.Annotations.Selected?.Kind ?? session.Tool;
+        bool numberStyle = styleKind == AnnotationKind.Number, mosaicStyle = styleKind == AnnotationKind.Mosaic;
+        colorLabel.Visibility = colorBox.Visibility = mosaicStyle ? Visibility.Collapsed : Visibility.Visible;
+        thicknessLabel.Text = numberStyle ? "直径" : mosaicStyle ? "粒度" : "粗细";
+        if (mosaicWidths != mosaicStyle)
+        {
+            mosaicWidths = mosaicStyle; thicknessBox.Items.Clear();
+            foreach (int width in mosaicStyle ? new[] { 8, 16, 24, 30 } : new[] { 2, 3, 5, 8 })
+                thicknessBox.Items.Add(new ComboBoxItem { Content = width + " px", Tag = width });
+        }
+        foreach (ComboBoxItem item in thicknessBox.Items) item.Content = (numberStyle ? 16 + (int)item.Tag * 4 : (int)item.Tag) + " px";
         foreach (ComboBoxItem item in colorBox.Items) if ((uint)item.Tag == session.Annotations.Rgb) colorBox.SelectedItem = item;
-        foreach (ComboBoxItem item in thicknessBox.Items) if ((int)item.Tag == session.Annotations.Thickness) thicknessBox.SelectedItem = item;
+        int styleWidth = mosaicStyle ? session.Annotations.MosaicSize : session.Annotations.Thickness;
+        foreach (ComboBoxItem item in thicknessBox.Items) if ((int)item.Tag == styleWidth) thicknessBox.SelectedItem = item;
         updatingStyle = false;
         status.Text = !string.IsNullOrEmpty(session.Status) ? session.Status : session.Tool switch
         {
             AnnotationKind.Rectangle => "拖动画框 · 拖动框线移动 · 拖动控制点缩放",
             AnnotationKind.Arrow => "拖动绘制 · 拖动线身移动 · 拖动端点调整 · Shift 限制方向",
+            AnnotationKind.Number => $"点击添加 {session.Annotations.NextNumber} · 拖动序号移动 · Delete 删除 · Ctrl+Z 撤销",
+            AnnotationKind.Mosaic => "拖动框选马赛克 · 拖动区域移动 · 控制点缩放 · Delete 删除 · Ctrl+Z 撤销",
             _ => "拖动框内移动 · 拖动截图边缘或角点调整大小"
         };
         status.Visibility = string.IsNullOrEmpty(status.Text) ? Visibility.Collapsed : Visibility.Visible;
@@ -241,7 +265,7 @@ internal sealed class SelectionSurface : FrameworkElement
         Cursor = hit switch
         {
             SelectionHit.Move => Cursors.SizeAll,
-            SelectionHit.Left or SelectionHit.Right when !target.Selection && session.Annotations.Selected?.Kind != AnnotationKind.Rectangle => Cursors.Cross,
+            SelectionHit.Left or SelectionHit.Right when !target.Selection && session.Annotations.Selected?.Kind is not (AnnotationKind.Rectangle or AnnotationKind.Mosaic) => Cursors.Cross,
             SelectionHit.Left or SelectionHit.Right => Cursors.SizeWE,
             SelectionHit.Top or SelectionHit.Bottom => Cursors.SizeNS,
             (SelectionHit.Left | SelectionHit.Top) or (SelectionHit.Right | SelectionHit.Bottom) => Cursors.SizeNWSE,
@@ -271,7 +295,7 @@ internal sealed class SelectionSurface : FrameworkElement
             dc.DrawGeometry(Shade, null, shade);
             dc.PushClip(new RectangleGeometry(r));
             dc.PushTransform(new MatrixTransform(sx, 0, 0, sy, -screen.Left * sx, -screen.Top * sy));
-            AnnotationRenderer.Draw(dc, session.Annotations.Items);
+            AnnotationRenderer.Draw(dc, session.Annotations.Items, session.Mosaic);
             dc.Pop();
             if (session.Annotating && session.Annotations.Selected is { } mark && !session.Dragging)
                 foreach (var handle in Annotations.Handles(mark))

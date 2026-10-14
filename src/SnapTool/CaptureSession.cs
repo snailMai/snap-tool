@@ -14,11 +14,13 @@ internal sealed class CaptureSession(DesktopSnapshot snapshot, Action finished, 
     Func<BitmapSource, CancellationToken, Task<string>> recognize,
     Func<string, CancellationToken, Task>? copyText = null, Action<string>? showTranslation = null,
     Action<BitmapSource, PixelRect>? showPin = null, Func<BitmapSource, CancellationToken, Task>? copyImage = null,
-    IReadOnlyList<PixelRect>? windowTargets = null, Action<PixelRect, BitmapSource>? showScroll = null)
+    IReadOnlyList<PixelRect>? windowTargets = null, Action<PixelRect, BitmapSource>? showScroll = null,
+    Func<PixelRect, bool>? showRecording = null)
 {
     internal DesktopSnapshot Snapshot { get; } = snapshot;
     internal SelectionModel Selection { get; } = new(snapshot.Bounds);
     internal Annotations Annotations { get; } = new();
+    internal MosaicRenderer Mosaic { get; } = new(snapshot);
     internal AnnotationKind? Tool { get; private set; }
     internal bool Annotating => Tool != null;
     internal bool Dragging => pendingWindowClick || Selection.Dragging || Annotations.Dragging;
@@ -156,22 +158,39 @@ internal sealed class CaptureSession(DesktopSnapshot snapshot, Action finished, 
     internal void SetAnnotationStyle(uint rgb, int thickness)
     {
         if (Busy || closed || Dragging) return;
-        Annotations.SetStyle(rgb, thickness); Refresh();
+        Annotations.SetStyle(rgb, thickness, Tool ?? AnnotationKind.Rectangle); Refresh();
     }
 
     internal void UndoAnnotation()
     {
         if (Busy || closed || Dragging) return;
-        Annotations.Undo(); Refresh();
+        Annotations.Undo(); Mosaic.Retain(Annotations.Items); Refresh();
     }
 
     internal void DeleteAnnotation()
     {
         if (Busy || closed || Dragging || !Annotating) return;
-        Annotations.Delete(); Refresh();
+        Annotations.Delete(); Mosaic.Retain(Annotations.Items); Refresh();
     }
 
-    internal BitmapSource CreateOutput() => AnnotationRenderer.Compose(Snapshot, Selection.Rectangle, Annotations.Items);
+    internal BitmapSource CreateOutput() => AnnotationRenderer.Compose(Snapshot, Selection.Rectangle, Annotations.Items, Mosaic);
+
+    internal void StartRecording()
+    {
+        if (Busy || Dragging || Selection.Rectangle.IsEmpty || closed) return;
+        if (Annotations.Items.Count != 0) { Status = "请先撤销标注再录屏；录屏不叠加截图标注。"; Refresh(); return; }
+        var region = Selection.Rectangle;
+        try
+        {
+            RecordingSize.Fit(region);
+            if (!Snapshot.Monitors.Any(m => region.Intersect(m) == region)) throw new InvalidOperationException("请在同一显示器内框选录屏范围。");
+            Busy = true;
+            if (showRecording == null) throw new InvalidOperationException("录屏入口不可用。");
+            if (showRecording(region)) Close();
+        }
+        catch (Exception ex) { if (!closed) { Status = "无法开始录屏，选区已保留。" + ex.Message; Refresh(); } }
+        finally { Busy = false; if (!closed) Refresh(); }
+    }
 
     internal void StartScroll()
     {
@@ -304,6 +323,6 @@ internal sealed class CaptureSession(DesktopSnapshot snapshot, Action finished, 
         if (closed) return;
         closed = true; pendingWindowClick = false; outputCancellation?.Cancel(); Selection.StopDragging();
         foreach (var window in windows.ToArray()) window.Close();
-        windows.Clear(); finished();
+        windows.Clear(); Mosaic.Clear(); finished();
     }
 }

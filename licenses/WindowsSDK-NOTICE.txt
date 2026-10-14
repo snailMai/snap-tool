@@ -1,0 +1,13 @@
+This application uses Microsoft.Windows.SDK.NET.Ref 10.0.19041.57,
+including Microsoft.Windows.SDK.NET.dll and WinRT.Runtime.dll.
+Copyright (c) Microsoft Corporation.
+
+The Windows SDK package declares its license at:
+https://aka.ms/WinSDKLicenseURL
+Project information: https://aka.ms/WinSDKProjectURL
+
+The C#/WinRT runtime is distributed under the MIT license.
+See CsWinRT-LICENSE.txt, from https://github.com/microsoft/CsWinRT.
+
+Screen capture and GIF encoding use Windows operating-system APIs.
+No FFmpeg binary, microphone capture or system-audio capture is included.
