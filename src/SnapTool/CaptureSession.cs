@@ -13,7 +13,7 @@ namespace SnapTool;
 internal sealed class CaptureSession(DesktopSnapshot snapshot, Action finished, Action<string, string> notify,
     Func<BitmapSource, CancellationToken, Task<string>> recognize,
     Func<string, CancellationToken, Task>? copyText = null, Action<string>? showTranslation = null,
-    Action<BitmapSource, PixelRect>? showPin = null)
+    Action<BitmapSource, PixelRect>? showPin = null, Func<BitmapSource, Task>? copyImage = null)
 {
     internal DesktopSnapshot Snapshot { get; } = snapshot;
     internal SelectionModel Selection { get; } = new(snapshot.Bounds);
@@ -42,13 +42,22 @@ internal sealed class CaptureSession(DesktopSnapshot snapshot, Action finished, 
         current.Activate(); current.Focus();
     }
 
+    internal (bool Selection, SelectionHit Hit) HitTest(PixelPoint p, int tolerance)
+    {
+        var hit = Selection.HitTest(p, tolerance);
+        if (!Annotating || Selection.Rectangle.IsEmpty || (hit != SelectionHit.None && hit != SelectionHit.Move))
+            return (true, hit);
+        return (false, Annotations.HitTest(p, tolerance).Hit);
+    }
+
     internal void Begin(PixelPoint p, int tolerance)
     {
-        if (Busy || closed) return;
+        if (Busy || closed || Dragging) return;
         Status = "";
         Pointer = p;
-        if (Tool is { } kind) Annotations.Begin(p, Selection.Rectangle, tolerance, kind);
-        else Selection.Begin(p, tolerance);
+        if (HitTest(p, tolerance).Selection)
+        { Annotations.Deselect(); Selection.Begin(p, tolerance); }
+        else if (Tool is { } kind) Annotations.Begin(p, Selection.Rectangle, tolerance, kind);
         if (!Dragging) return;
         foreach (var window in windows) window.HideToolbar();
         Refresh();
@@ -58,8 +67,8 @@ internal sealed class CaptureSession(DesktopSnapshot snapshot, Action finished, 
     {
         if (Busy || closed) return;
         Pointer = p;
-        if (Annotating) Annotations.Update(p, square);
-        else Selection.Update(p);
+        if (Selection.Dragging) Selection.Update(p);
+        else if (Annotations.Dragging) Annotations.Update(p, square);
         Refresh();
     }
 
@@ -67,8 +76,8 @@ internal sealed class CaptureSession(DesktopSnapshot snapshot, Action finished, 
     {
         if (Busy || closed) return;
         Pointer = p;
-        if (Annotating) Annotations.End(p, square);
-        else Selection.End(p);
+        if (Selection.Dragging) Selection.End(p);
+        else if (Annotations.Dragging) Annotations.End(p, square);
         Refresh();
         if (Selection.Rectangle.IsEmpty) return;
         var current = windows.FirstOrDefault(w => w.Screen.Contains(p)) ?? windows.FirstOrDefault(w => !w.Screen.Intersect(Selection.Rectangle).IsEmpty);
@@ -80,6 +89,8 @@ internal sealed class CaptureSession(DesktopSnapshot snapshot, Action finished, 
         if (Busy || closed || Dragging || Selection.Rectangle.IsEmpty) return;
         Tool = kind; Annotations.Deselect(); Status = ""; Refresh();
     }
+
+    internal void ToggleTool(AnnotationKind kind) => SetTool(Tool == kind ? null : kind);
 
     internal void SetAnnotationStyle(uint rgb, int thickness)
     {
@@ -130,7 +141,9 @@ internal sealed class CaptureSession(DesktopSnapshot snapshot, Action finished, 
         Busy = true;
         try
         {
-            await ImageOutput.Copy(CreateOutput());
+            var image = CreateOutput();
+            if (copyImage != null) await copyImage(image);
+            else await ImageOutput.Copy(image);
             if (!closed) { Close(); notify("已复制截图", "可以粘贴到聊天、文档或图片编辑器。"); }
         }
         catch (Exception ex)

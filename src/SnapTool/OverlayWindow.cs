@@ -1,6 +1,7 @@
 using System;
 using System.Globalization;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -19,7 +20,7 @@ internal sealed class OverlayWindow : Window
     private readonly Canvas canvas;
     private readonly Border toolbar;
     private readonly List<Button> outputButtons = [];
-    private Button rectangleButton = null!, lineButton = null!, arrowButton = null!, selectionButton = null!, undoButton = null!, deleteButton = null!;
+    private Button rectangleButton = null!, lineButton = null!, arrowButton = null!, undoButton = null!, deleteButton = null!;
     private readonly ComboBox colorBox = new() { Width = 82, Margin = new Thickness(4), VerticalContentAlignment = VerticalAlignment.Center };
     private readonly ComboBox thicknessBox = new() { Width = 70, Margin = new Thickness(4), VerticalContentAlignment = VerticalAlignment.Center };
     private StackPanel stylePanel = null!;
@@ -61,20 +62,19 @@ internal sealed class OverlayWindow : Window
     private Border CreateToolbar()
     {
         var panel = new StackPanel { Orientation = Orientation.Horizontal };
-        outputButtons.Add(AddButton(panel, "复制  ↵", "复制图片，Enter", async () => await session.Copy(this), true));
-        outputButtons.Add(AddButton(panel, "贴图", "置顶贴图，F3", session.Pin));
+        outputButtons.Add(AddButton(panel, "复制 Ctrl+C", "复制图片，Ctrl+C 或 Enter", async () => await session.Copy(this), true));
+        outputButtons.Add(AddButton(panel, "贴图 Ctrl+V", "当前选区置顶贴图，Ctrl+V 或 F3", session.Pin));
         outputButtons.Add(AddButton(panel, "识别文字", "识别文字，Shift+C", async () => await session.RecognizeText()));
         outputButtons.Add(AddButton(panel, "翻译", "有道文本翻译，Shift+T", async () => await session.RecognizeText(true)));
         outputButtons.Add(AddButton(panel, "保存", "保存 PNG，Ctrl+S", () => session.Save(this)));
         AddButton(panel, "取消", "取消截图，Esc", () => session.Close());
         var tools = new StackPanel { Orientation = Orientation.Horizontal };
-        selectionButton = AddButton(tools, "调整选区", "调整截图选区，V", () => session.SetTool(null));
-        rectangleButton = AddButton(tools, "矩形", "绘制矩形，R；按住 Shift 绘制正方形", () => session.SetTool(AnnotationKind.Rectangle));
-        lineButton = AddButton(tools, "直线", "绘制直线，L；Shift 限制为水平、垂直或 45°", () => session.SetTool(AnnotationKind.Line));
-        arrowButton = AddButton(tools, "箭头", "绘制箭头，A；Shift 限制为水平、垂直或 45°", () => session.SetTool(AnnotationKind.Arrow));
+        rectangleButton = AddButton(tools, "矩形", "绘制矩形，R；Shift 正方形；再次点击或 V 退出绘制", () => session.ToggleTool(AnnotationKind.Rectangle));
+        lineButton = AddButton(tools, "直线", "绘制直线，L；Shift 限制方向；再次点击或 V 退出绘制", () => session.ToggleTool(AnnotationKind.Line));
+        arrowButton = AddButton(tools, "箭头", "绘制箭头，A；Shift 限制方向；再次点击或 V 退出绘制", () => session.ToggleTool(AnnotationKind.Arrow));
         undoButton = AddButton(tools, "撤销", "撤销标注，Ctrl+Z", session.UndoAnnotation);
         deleteButton = AddButton(tools, "删除", "删除选中标注，Delete", session.DeleteAnnotation);
-        outputButtons.AddRange([selectionButton, rectangleButton, lineButton, arrowButton, undoButton, deleteButton]);
+        outputButtons.AddRange([rectangleButton, lineButton, arrowButton, undoButton, deleteButton]);
         stylePanel = new StackPanel { Orientation = Orientation.Horizontal, Visibility = Visibility.Collapsed };
         stylePanel.Children.Add(new TextBlock { Text = "颜色", Foreground = Brushes.White, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 2, 0) });
         foreach (var color in Colors) colorBox.Items.Add(new ComboBoxItem { Content = color.Name, Tag = color.Rgb });
@@ -152,7 +152,6 @@ internal sealed class OverlayWindow : Window
         rectangleButton.Background = session.Tool == AnnotationKind.Rectangle ? Brushes.Teal : new SolidColorBrush(Color.FromRgb(40, 50, 70));
         lineButton.Background = session.Tool == AnnotationKind.Line ? Brushes.Teal : new SolidColorBrush(Color.FromRgb(40, 50, 70));
         arrowButton.Background = session.Tool == AnnotationKind.Arrow ? Brushes.Teal : new SolidColorBrush(Color.FromRgb(40, 50, 70));
-        selectionButton.Background = !session.Annotating ? Brushes.Teal : new SolidColorBrush(Color.FromRgb(40, 50, 70));
         stylePanel.Visibility = session.Annotating ? Visibility.Visible : Visibility.Collapsed;
         colorBox.IsEnabled = thicknessBox.IsEnabled = !session.Busy;
         updatingStyle = true;
@@ -163,37 +162,43 @@ internal sealed class OverlayWindow : Window
         {
             AnnotationKind.Rectangle => "拖动画框 · 拖动框线移动 · 拖动控制点缩放",
             AnnotationKind.Line or AnnotationKind.Arrow => "拖动绘制 · 拖动线身移动 · 拖动端点调整 · Shift 限制方向",
-            _ => ""
+            _ => "拖动框内移动 · 拖动截图边缘或角点调整大小"
         };
         status.Visibility = string.IsNullOrEmpty(status.Text) ? Visibility.Collapsed : Visibility.Visible;
         if (toolbar.Visibility == Visibility.Visible) PlaceToolbar();
     }
-    private async void OnKey(object sender, KeyEventArgs e)
+    private async void OnKey(object sender, KeyEventArgs e) => await HandleKey(e, Keyboard.Modifiers);
+
+    internal async Task HandleKey(KeyEventArgs e, ModifierKeys modifiers)
     {
         if (e.Key == Key.Escape && (!session.Busy || session.Recognizing))
         { e.Handled = true; session.Close(); return; }
         if (session.Busy) { e.Handled = true; return; }
-        if (e.Key == Key.F3 && Keyboard.Modifiers == ModifierKeys.None)
+        if (e.Key == Key.C && modifiers == ModifierKeys.Control)
+        { e.Handled = true; await session.Copy(this); }
+        else if (e.Key == Key.V && modifiers == ModifierKeys.Control)
         { e.Handled = true; session.Pin(); }
-        else if (e.Key == Key.R && Keyboard.Modifiers == ModifierKeys.None)
+        else if (e.Key == Key.F3 && modifiers == ModifierKeys.None)
+        { e.Handled = true; session.Pin(); }
+        else if (e.Key == Key.R && modifiers == ModifierKeys.None)
         { e.Handled = true; session.SetTool(AnnotationKind.Rectangle); }
-        else if (e.Key == Key.L && Keyboard.Modifiers == ModifierKeys.None)
+        else if (e.Key == Key.L && modifiers == ModifierKeys.None)
         { e.Handled = true; session.SetTool(AnnotationKind.Line); }
-        else if (e.Key == Key.A && Keyboard.Modifiers == ModifierKeys.None)
+        else if (e.Key == Key.A && modifiers == ModifierKeys.None)
         { e.Handled = true; session.SetTool(AnnotationKind.Arrow); }
-        else if (e.Key == Key.V && Keyboard.Modifiers == ModifierKeys.None)
+        else if (e.Key == Key.V && modifiers == ModifierKeys.None)
         { e.Handled = true; session.SetTool(null); }
-        else if (e.Key == Key.Z && Keyboard.Modifiers == ModifierKeys.Control)
+        else if (e.Key == Key.Z && modifiers == ModifierKeys.Control)
         { e.Handled = true; session.UndoAnnotation(); }
-        else if (e.Key == Key.Delete && Keyboard.Modifiers == ModifierKeys.None)
+        else if (e.Key == Key.Delete && modifiers == ModifierKeys.None)
         { e.Handled = true; session.DeleteAnnotation(); }
-        else if (e.Key == Key.C && Keyboard.Modifiers == ModifierKeys.Shift)
+        else if (e.Key == Key.C && modifiers == ModifierKeys.Shift)
         { e.Handled = true; await session.RecognizeText(); }
-        else if (e.Key == Key.T && Keyboard.Modifiers == ModifierKeys.Shift)
+        else if (e.Key == Key.T && modifiers == ModifierKeys.Shift)
         { e.Handled = true; await session.RecognizeText(true); }
         else if (e.Key == Key.Enter && e.OriginalSource is not Button)
         { e.Handled = true; await session.Copy(this); }
-        else if (e.Key == Key.S && Keyboard.Modifiers == ModifierKeys.Control)
+        else if (e.Key == Key.S && modifiers == ModifierKeys.Control)
         { e.Handled = true; session.Save(this); }
     }
 }
@@ -222,7 +227,7 @@ internal sealed class SelectionSurface : FrameworkElement
     {
         if (session.Busy) return;
         var p = Native.CursorPosition();
-        if (!session.Annotating && e.ClickCount == 2 && session.Selection.Rectangle.Contains(p))
+        if (!session.Annotating && e.ClickCount == 2 && session.HitTest(p, Tolerance) == (true, SelectionHit.Move))
         { e.Handled = true; await session.Copy(window); return; }
         Focus(); session.Begin(p, Tolerance); if (session.Dragging) CaptureMouse(); e.Handled = true;
     }
@@ -230,11 +235,12 @@ internal sealed class SelectionSurface : FrameworkElement
     {
         if (session.Busy) return;
         var p = Native.CursorPosition(); session.Move(p, Keyboard.Modifiers.HasFlag(ModifierKeys.Shift));
-        var hit = session.Annotating ? session.Annotations.HitTest(p, Tolerance).Hit : session.Selection.HitTest(p, Tolerance);
+        var target = session.HitTest(p, Tolerance);
+        var hit = target.Hit;
         Cursor = hit switch
         {
             SelectionHit.Move => Cursors.SizeAll,
-            SelectionHit.Left or SelectionHit.Right when session.Annotating && session.Annotations.Selected?.Kind != AnnotationKind.Rectangle => Cursors.Cross,
+            SelectionHit.Left or SelectionHit.Right when !target.Selection && session.Annotations.Selected?.Kind != AnnotationKind.Rectangle => Cursors.Cross,
             SelectionHit.Left or SelectionHit.Right => Cursors.SizeWE,
             SelectionHit.Top or SelectionHit.Bottom => Cursors.SizeNS,
             (SelectionHit.Left | SelectionHit.Top) or (SelectionHit.Right | SelectionHit.Bottom) => Cursors.SizeNWSE,
@@ -274,7 +280,7 @@ internal sealed class SelectionSurface : FrameworkElement
                 }
             dc.Pop();
             dc.DrawRectangle(null, new Pen(Accent, 1.5), r);
-            if (!session.Dragging && !session.Annotating)
+            if (!session.Dragging)
             {
                 foreach (double x in new[] { r.Left, (r.Left + r.Right) / 2, r.Right })
                     foreach (double y in new[] { r.Top, (r.Top + r.Bottom) / 2, r.Bottom })

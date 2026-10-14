@@ -128,6 +128,7 @@ internal static class Program
         AnnotationChecks.Run(Test);
         LineAnnotationChecks.Run(Test);
         PinChecks.Run(Test);
+        ShortcutChecks.Run(Test);
         Console.WriteLine($"{passed} passed, {failed} failed");
         return failed == 0 ? 0 : 1;
     }

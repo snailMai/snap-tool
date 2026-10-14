@@ -162,6 +162,82 @@ internal static class AnnotationChecks
             Assert(s.Annotations.Items.Single().Rectangle == new PixelRect(0, 0, 100, 100));
             Assert(Pixel(s.CreateOutput(), 100, 50) == 0xFF4545); s.Close();
         });
+        test("all annotation tools allow direct capture edge and corner resize", () =>
+        {
+            foreach (var kind in new[] { AnnotationKind.Rectangle, AnnotationKind.Line, AnnotationKind.Arrow })
+                foreach (var p in new[] { new PixelPoint(-100, -50), new(100, -50), new(300, -50), new(-100, 100),
+                    new(300, 100), new(-100, 250), new(100, 250), new(300, 250) })
+                {
+                    var s = Session(); s.SetTool(kind); Assert(s.HitTest(p, 2).Selection);
+                    s.Begin(p, 2); Assert(s.Selection.Dragging && !s.Annotations.Dragging);
+                    s.End(new(p.X + (p.X == 300 ? -20 : 20), p.Y + (p.Y == 250 ? -20 : 20)));
+                    Assert(s.Selection.Rectangle != Bounds && s.Tool == kind && s.Annotations.Items.Count == 0); s.Close();
+                }
+        });
+        test("capture border takes priority over coincident annotation handles", () =>
+        {
+            var s = Session(); s.SetTool(AnnotationKind.Rectangle);
+            s.Annotations.Begin(new(-100, -50), Bounds, 0); s.Annotations.End(new(100, 100));
+            var mark = s.Annotations.Items.Single();
+            Assert(s.HitTest(new(-100, -50), 2) == (true, SelectionHit.Left | SelectionHit.Top));
+            s.Begin(new(-100, -50), 2); s.End(new(-80, -30));
+            Assert(s.Selection.Rectangle == new PixelRect(-80, -30, 300, 250) && s.Annotations.Items.Single() == mark); s.Close();
+        });
+        test("annotation gesture retains ownership when cursor crosses capture border", () =>
+        {
+            var s = Session(); s.SetTool(AnnotationKind.Arrow); s.Begin(new(0, 0), 2);
+            s.Move(new(300, 250)); s.Begin(new(300, 250), 2); s.End(new(500, 500));
+            Assert(s.Selection.Rectangle == Bounds && !s.Dragging && s.Annotations.Items.Single().End == new PixelPoint(300, 250)); s.Close();
+        });
+        test("interior annotation movement and handle editing retain capture bounds", () =>
+        {
+            foreach (var kind in new[] { AnnotationKind.Rectangle, AnnotationKind.Line, AnnotationKind.Arrow })
+            {
+                var s = Session(); s.SetTool(kind); s.Begin(new(0, 0), 2); s.End(new(100, 100));
+                var body = kind == AnnotationKind.Rectangle ? new PixelPoint(0, 40) : new PixelPoint(40, 40);
+                Assert(s.HitTest(body, 2) == (false, SelectionHit.Move));
+                s.Begin(body, 2); s.End(new(body.X + 20, body.Y + 10));
+                Assert(s.Annotations.Selected!.Start == new PixelPoint(20, 10));
+                s.Begin(new(20, 10), 2); s.End(new(30, 20));
+                Assert(s.Annotations.Selected!.Start == new PixelPoint(30, 20) && s.Selection.Rectangle == Bounds); s.Close();
+            }
+        });
+        test("resize gesture blocks tool changes and preserves existing annotations", () =>
+        {
+            var s = Session(); s.SetTool(AnnotationKind.Line); s.Begin(new(0, 0), 2); s.End(new(100, 0));
+            var mark = s.Annotations.Items.Single(); s.Begin(new(300, 250), 2);
+            s.ToggleTool(AnnotationKind.Line); s.SetTool(AnnotationKind.Arrow); s.SetAnnotationStyle(0, 8);
+            s.Move(new(50, 50)); s.End(new(60, 60));
+            Assert(s.Tool == AnnotationKind.Line && s.Annotations.Items.Single() == mark && s.Selection.Rectangle == new PixelRect(-100, -50, 60, 60)); s.Close();
+        });
+        test("toggle each drawing tool restores interior capture movement", () =>
+        {
+            foreach (var kind in new[] { AnnotationKind.Rectangle, AnnotationKind.Line, AnnotationKind.Arrow })
+            {
+                var s = Session(); s.Begin(new(300, 250), 2); s.End(new(200, 150));
+                s.ToggleTool(kind); Assert(s.Tool == kind); s.ToggleTool(kind); Assert(!s.Annotating);
+                s.Begin(new(0, 0), 2); s.End(new(20, 10));
+                Assert(s.Selection.Rectangle == new PixelRect(-80, -40, 220, 160) && s.Annotations.Items.Count == 0); s.Close();
+            }
+        });
+        test("collapsed capture can be reselected while annotation tool stays active", () =>
+        {
+            var s = Session(); s.SetTool(AnnotationKind.Arrow); s.Begin(new(-100, 100), 2); s.End(new(300, 100));
+            Assert(s.Selection.Rectangle.IsEmpty && s.Tool == AnnotationKind.Arrow);
+            s.Begin(new(0, 0), 2); s.End(new(60, 60));
+            Assert(s.Selection.Rectangle == new PixelRect(0, 0, 60, 60) && s.Annotations.Items.Count == 0); s.Close();
+        });
+        test("direct resize controls OCR and pin crop and prevents output during drag", () => OcrChecks.Pump(async () =>
+        {
+            int ocr = 0, pins = 0; PixelRect pinned = default;
+            var s = new CaptureSession(Snapshot(), () => { }, (_, _) => { }, (image, _) =>
+                { ocr++; Assert(image.PixelWidth == 160 && image.PixelHeight == 110); return Task.FromResult(""); },
+                showPin: (image, rectangle) => { pins++; pinned = rectangle; Assert(image.PixelWidth == 160 && image.PixelHeight == 110); });
+            s.Selection.Begin(new(-100, -50), 0); s.Selection.End(new(300, 250)); s.SetTool(AnnotationKind.Arrow);
+            s.Begin(new(300, 250), 2); s.Move(new(60, 60)); await s.RecognizeText(); s.Pin(); Assert(ocr == 0 && pins == 0);
+            s.End(new(60, 60)); Assert(s.CreateOutput().PixelWidth == 160);
+            await s.RecognizeText(); s.Pin(); Assert(ocr == 1 && pins == 1 && pinned == new PixelRect(-100, -50, 60, 60));
+        }));
         test("annotation mode buttons style undo and deletion use session state", () =>
         {
             var s = Session(); var window = new OverlayWindow(s, Bounds);
@@ -175,7 +251,8 @@ internal static class AnnotationChecks
                 Assert(s.Annotations.Items.Single().Rgb == 0x409CFF);
                 Find("删除").RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); Assert(s.Annotations.Items.Count == 0);
                 Find("撤销").RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); Assert(s.Annotations.Items.Count == 1);
-                Find("调整选区").RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); Assert(!s.Annotating);
+                Assert(!Descendants(toolbar).OfType<Button>().Any(b => Equals(b.Content, "调整选区")));
+                Find("矩形").RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); Assert(!s.Annotating);
             }
             finally { window.Close(); s.Close(); }
         });
