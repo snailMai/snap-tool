@@ -22,6 +22,19 @@ internal sealed class DesktopSnapshot
     {
         var monitors = Native.Monitors();
         var bounds = PixelRect.Union(monitors);
+        return new(bounds, monitors, CapturePixels(bounds, monitors));
+    }
+
+    internal static BitmapSource CaptureRegion(PixelRect rectangle)
+    {
+        if (rectangle.Width < 32 || rectangle.Height < 64 || (long)rectangle.Width * rectangle.Height > ScrollStitcher.MaxPixels ||
+            !Native.Monitors().Exists(m => m.Intersect(rectangle) == rectangle))
+            throw new InvalidOperationException("长截图区域需要完整位于同一显示器内，且尺寸不能过大。");
+        return CapturePixels(rectangle, [rectangle]);
+    }
+
+    private static BitmapSource CapturePixels(PixelRect bounds, IReadOnlyList<PixelRect> monitors)
+    {
         if ((long)bounds.Width * bounds.Height > 128_000_000)
             throw new InvalidOperationException("显示区域过大，无法安全分配截图内存。");
         using var bitmap = new Bitmap(bounds.Width, bounds.Height, System.Drawing.Imaging.PixelFormat.Format32bppRgb);
@@ -51,7 +64,7 @@ internal sealed class DesktopSnapshot
             var image = BitmapSource.Create(bounds.Width, bounds.Height, 96, 96, PixelFormats.Bgr32, null,
                 data.Scan0, checked(data.Stride * data.Height), data.Stride);
             image.Freeze();
-            return new(bounds, monitors, image);
+            return image;
         }
         finally { bitmap.UnlockBits(data); }
     }

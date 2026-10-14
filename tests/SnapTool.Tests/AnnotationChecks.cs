@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using SnapTool;
@@ -93,13 +94,13 @@ internal static class AnnotationChecks
             var m = Marked(); int rejected = 0;
             foreach (var (color, width) in new[] { (0x1000000u, 3), (0u, 0), (0u, 13) })
                 try { m.SetStyle(color, width); } catch (ArgumentOutOfRangeException) { rejected++; }
-            Assert(rejected == 3 && m.Items.Single().Thickness == 3);
+            Assert(rejected == 3 && m.Items.Single().Thickness == 8);
         });
         test("annotation export uses negative origin and retains original pixels", () =>
         {
             var snapshot = Snapshot(); var output = AnnotationRenderer.Compose(snapshot, Bounds, Marked().Items);
             Assert(output.PixelWidth == 400 && output.PixelHeight == 300 && output.IsFrozen);
-            Assert(Pixel(output, 100, 50) == 0xFF4545 && Pixel(output, 104, 54) == 0xFFFFFF);
+            Assert(Pixel(output, 100, 50) == 0xFF4545 && Pixel(output, 107, 57) == 0xFF4545 && Pixel(output, 108, 58) == 0xFFFFFF);
             Assert(Pixel(snapshot.Image, 100, 50) == 0xFFFFFF);
         });
         test("annotation crop clips original edges without inventing new border", () =>
@@ -128,7 +129,7 @@ internal static class AnnotationChecks
                 }
                 var preview = new RenderTargetBitmap(400, 300, 96 / scale, 96 / scale, PixelFormats.Pbgra32);
                 preview.Render(v);
-                Assert(Pixel(preview, 100, 50) == Pixel(output, 100, 50) && Pixel(preview, 104, 54) == 0xFFFFFF);
+                Assert(Pixel(preview, 100, 50) == Pixel(output, 100, 50) && Pixel(preview, 107, 57) == 0xFF4545 && Pixel(preview, 109, 59) == 0xFFFFFF);
             }
         });
         test("annotation PNG export roundtrip retains colored border", () =>
@@ -248,10 +249,13 @@ internal static class AnnotationChecks
                 Find("矩形").RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); Assert(s.Annotating);
                 s.Begin(new(0, 0), 2); s.End(new(100, 100));
                 var combos = Descendants(toolbar).OfType<ComboBox>().ToArray(); combos[0].SelectedIndex = 3;
-                Assert(s.Annotations.Items.Single().Rgb == 0x409CFF);
-                Find("删除").RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); Assert(s.Annotations.Items.Count == 0);
+                Assert(s.Annotations.Items.Single().Rgb == 0x409CFF && s.Annotations.Items.Single().Thickness == 8);
+                Assert((int)((ComboBoxItem)combos[1].SelectedItem).Tag == 8);
+                ShortcutChecks.Press(window, Key.Delete, ModifierKeys.None).GetAwaiter().GetResult(); Assert(s.Annotations.Items.Count == 0);
                 Find("撤销").RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); Assert(s.Annotations.Items.Count == 1);
                 Assert(!Descendants(toolbar).OfType<Button>().Any(b => Equals(b.Content, "调整选区")));
+                Assert(!Descendants(toolbar).OfType<Button>().Any(b => Equals(b.Content, "删除") || Equals(b.Content, "识别文字")));
+                Assert(Equals(Find("OCR").ToolTip, "识别文字，Shift+C"));
                 Find("矩形").RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); Assert(!s.Annotating);
             }
             finally { window.Close(); s.Close(); }
@@ -283,9 +287,9 @@ internal static class AnnotationChecks
         var s = new CaptureSession(snapshot, () => { }, (_, _) => { }, (_, _) => Task.FromResult(""));
         s.Selection.Begin(new(10, 5), 0); s.Selection.End(new(1010, 440));
         s.SetTool(AnnotationKind.Rectangle); s.Begin(new(18, 80), 3); s.End(new(480, 130));
-        s.Annotations.Deselect(); s.SetAnnotationStyle(0x409CFF, 5); s.Begin(new(18, 145), 3); s.End(new(450, 205));
-        s.SetTool(AnnotationKind.Arrow); s.SetAnnotationStyle(0x38D996, 3); s.Begin(new(40, 320), 3); s.End(new(950, 320));
-        s.SetTool(AnnotationKind.Arrow); s.SetAnnotationStyle(0xFFD447, 5); s.Begin(new(850, 270), 3); s.End(new(650, 140));
+        s.Annotations.Deselect(); s.SetAnnotationStyle(0x409CFF, 8); s.Begin(new(18, 145), 3); s.End(new(450, 205));
+        s.SetTool(AnnotationKind.Arrow); s.SetAnnotationStyle(0x38D996, 8); s.Begin(new(40, 320), 3); s.End(new(950, 320));
+        s.SetTool(AnnotationKind.Arrow); s.SetAnnotationStyle(0xFFD447, 8); s.Begin(new(850, 270), 3); s.End(new(650, 140));
         var window = new OverlayWindow(s, screen);
         string dir = Path.Combine(Program.FindRoot(), ".tmp", "rectangle-preview"); Directory.CreateDirectory(dir);
         try

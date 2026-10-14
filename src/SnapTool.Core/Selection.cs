@@ -37,6 +37,11 @@ public sealed class SelectionModel(PixelRect bounds)
     private PixelRect original;
     private SelectionHit mode;
 
+    public void Select(PixelRect rectangle)
+    {
+        if (!Dragging) Rectangle = Bounds.Intersect(rectangle);
+    }
+
     public SelectionHit HitTest(PixelPoint p, int tolerance)
     {
         if (Rectangle.IsEmpty) return SelectionHit.None;

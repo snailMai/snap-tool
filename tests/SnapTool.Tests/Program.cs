@@ -15,11 +15,17 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        if (args.Contains("--scroll-checks")) { ScrollChecks.Run(Test); return failed == 0 ? 0 : 1; }
+        if (args.Contains("--scroll-window-checks")) { Test("native scroll capture", ScrollChecks.CheckNativeWindows); return failed == 0 ? 0 : 1; }
+        if (args.Contains("--scroll-preview")) { ScrollChecks.RenderPreview(); return 0; }
+        if (args.Contains("--refresh-checks")) { RefreshChecks.Run(Test); return failed == 0 ? 0 : 1; }
         if (args.Contains("--fixture")) { new Application().Run(new FixtureWindow(args.Contains("--secondary"))); return 0; }
         if (args.Contains("--translation-preview")) { TranslationChecks.RenderPreview(); return 0; }
         if (args.Contains("--rectangle-preview")) { AnnotationChecks.RenderPreview(); return 0; }
         if (args.Contains("--arrow-preview")) { ArrowAnnotationChecks.RenderArrowPreview(); return 0; }
-        if (args.Contains("--pin-window-checks")) { PinChecks.CheckWindows(); return 0; }
+        if (args.Contains("--pin-window-checks")) { Test("native pin windows", PinChecks.CheckWindows); return failed == 0 ? 0 : 1; }
+        if (args.Contains("--window-selection-checks")) { Test("native window selection", WindowSelectionChecks.CheckNativeWindows); return failed == 0 ? 0 : 1; }
+        if (args.Contains("--window-selection-preview")) { WindowSelectionChecks.RenderPreview(); return 0; }
         if (args.Contains("--screens"))
         { foreach (var screen in Native.Monitors()) Console.WriteLine(screen); return 0; }
         Test("PerMonitorV2 DPI context", () => Equal(true, Native.AreDpiAwarenessContextsEqual(Native.GetThreadDpiAwarenessContext(), new IntPtr(-4))));
@@ -129,6 +135,9 @@ internal static class Program
         ArrowAnnotationChecks.Run(Test);
         PinChecks.Run(Test);
         ShortcutChecks.Run(Test);
+        WindowSelectionChecks.Run(Test);
+        RefreshChecks.Run(Test);
+        ScrollChecks.Run(Test);
         Console.WriteLine($"{passed} passed, {failed} failed");
         return failed == 0 ? 0 : 1;
     }

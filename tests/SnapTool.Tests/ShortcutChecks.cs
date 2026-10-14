@@ -1,6 +1,10 @@
 using System;
 using System.Linq;
+using System.Runtime.InteropServices;
+using System.Threading;
 using System.Threading.Tasks;
+using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
@@ -15,17 +19,18 @@ internal static class ShortcutChecks
     private static readonly PixelRect Bounds = new(0, 0, 400, 300);
     private static void Assert(bool value) { if (!value) throw new Exception("Shortcut assertion failed"); }
     private static CaptureSession Session(Func<BitmapSource, Task>? copy = null, Action<BitmapSource, PixelRect>? pin = null,
-        Action? finished = null, Action? ocr = null)
+        Action? finished = null, Action? ocr = null, Func<BitmapSource, CancellationToken, Task>? cancellableCopy = null)
     {
         var s = new CaptureSession(new(Bounds, [Bounds], OcrChecks.Sample(true, 400, 300)), finished ?? (() => { }), (_, _) => { },
-            (_, _) => { ocr?.Invoke(); return Task.FromResult(""); }, showPin: pin, copyImage: copy);
+            (_, _) => { ocr?.Invoke(); return Task.FromResult(""); }, showPin: pin,
+            copyImage: cancellableCopy ?? (copy == null ? null : (image, _) => copy(image)));
         s.Selection.Begin(new(20, 20), 0); s.Selection.End(new(300, 200));
         s.SetTool(AnnotationKind.Arrow); s.Begin(new(50, 50), 2); s.End(new(200, 150)); return s;
     }
     private static KeyEventArgs KeyEvent(OverlayWindow window, Key key) =>
         new(Keyboard.PrimaryDevice, HwndSource.FromHwnd(new WindowInteropHelper(window).EnsureHandle()), Environment.TickCount, key)
             { RoutedEvent = Keyboard.PreviewKeyDownEvent };
-    private static Task Press(OverlayWindow window, Key key, ModifierKeys modifiers) => window.HandleKey(KeyEvent(window, key), modifiers);
+    internal static Task Press(OverlayWindow window, Key key, ModifierKeys modifiers) => window.HandleKey(KeyEvent(window, key), modifiers);
     private static byte[] Pixels(BitmapSource image)
     {
         var converted = new FormatConvertedBitmap(image, PixelFormats.Pbgra32, null, 0);
@@ -33,6 +38,75 @@ internal static class ShortcutChecks
     }
     internal static void Run(Action<string, Action> test)
     {
+        test("closing capture cancels clipboard retry and permits a new capture", () => OcrChecks.Pump(async () =>
+        {
+            int attempts = 0, writes = 0, closed = 0;
+            var s = Session(finished: () => closed++, cancellableCopy: (image, token) =>
+                ImageOutput.CopyWithRetry(image, token, _ =>
+                {
+                    attempts++;
+                    if (attempts == 1) throw new ExternalException("Synthetic clipboard busy");
+                    writes++;
+                }));
+            var window = new OverlayWindow(s, Bounds);
+            try
+            {
+                var task = s.Copy(window); Assert(s.Busy && attempts == 1);
+                s.Close(); s.Close();
+                int nextCopies = 0;
+                var next = Session(_ => { nextCopies++; return Task.CompletedTask; });
+                var nextWindow = new OverlayWindow(next, Bounds);
+                try { await next.Copy(nextWindow); Assert(nextCopies == 1); }
+                finally { nextWindow.Close(); next.Close(); }
+                await task;
+                Assert(!s.Busy && attempts == 1 && writes == 0 && closed == 1);
+            }
+            finally { window.Close(); s.Close(); }
+        }));
+        test("image clipboard retry succeeds or propagates final failure", () => OcrChecks.Pump(async () =>
+        {
+            int attempts = 0, writes = 0;
+            await ImageOutput.CopyWithRetry(OcrChecks.Sample(), CancellationToken.None, _ =>
+            { if (++attempts < 3) throw new ExternalException(); writes++; });
+            Assert(attempts == 3 && writes == 1);
+            attempts = 0;
+            try
+            {
+                await ImageOutput.CopyWithRetry(OcrChecks.Sample(), CancellationToken.None, _ => { attempts++; throw new ExternalException(); });
+                throw new Exception("Expected retry exhaustion");
+            }
+            catch (ExternalException) { Assert(attempts == 4); }
+        }));
+        test("Enter respects toolbar controls descendants and modifiers", () => OcrChecks.Pump(async () =>
+        {
+            int copies = 0;
+            var s = Session(_ => { copies++; return Task.CompletedTask; });
+            var window = new OverlayWindow(s, Bounds);
+            try
+            {
+                var controls = RefreshChecks.Descendants<Control>((DependencyObject)window.Content).ToArray();
+                foreach (var control in controls.Where(c => c is Button || c is ComboBox))
+                {
+                    var e = KeyEvent(window, Key.Enter); e.Source = control;
+                    await window.HandleKey(e, ModifierKeys.None); Assert(!e.Handled && copies == 0);
+                }
+                var item = (ComboBoxItem)controls.OfType<ComboBox>().First().Items[0];
+                foreach (var source in new object[] { item, new TextBlock { Text = "8 px" } })
+                {
+                    var e = KeyEvent(window, Key.Enter); e.Source = source;
+                    await window.HandleKey(e, ModifierKeys.None); Assert(!e.Handled && copies == 0);
+                }
+                foreach (var modifiers in new[] { ModifierKeys.Control, ModifierKeys.Shift, ModifierKeys.Alt, ModifierKeys.Control | ModifierKeys.Shift })
+                {
+                    var e = KeyEvent(window, Key.Enter); await window.HandleKey(e, modifiers);
+                    Assert(!e.Handled && copies == 0);
+                }
+                var surface = RefreshChecks.Descendants<SelectionSurface>((DependencyObject)window.Content).Single();
+                var enter = KeyEvent(window, Key.Enter); enter.Source = surface;
+                await window.HandleKey(enter, ModifierKeys.None); Assert(enter.Handled && copies == 1);
+            }
+            finally { window.Close(); s.Close(); }
+        }));
         test("Ctrl+C and Enter copy annotated selection and close once", () => OcrChecks.Pump(async () =>
         {
             foreach (var (key, modifiers) in new[] { (Key.C, ModifierKeys.Control), (Key.Enter, ModifierKeys.None) })

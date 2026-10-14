@@ -38,7 +38,7 @@ public sealed class Annotations
     public bool Dragging => before != null;
     public bool CanUndo => Dragging || history.Count > 0;
     public uint Rgb { get; private set; } = 0xFF4545;
-    public int Thickness { get; private set; } = 3;
+    public int Thickness { get; private set; } = 8;
 
     public void Deselect() { if (!Dragging) SelectedIndex = -1; }
 

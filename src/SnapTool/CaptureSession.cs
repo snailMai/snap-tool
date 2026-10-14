@@ -13,25 +13,34 @@ namespace SnapTool;
 internal sealed class CaptureSession(DesktopSnapshot snapshot, Action finished, Action<string, string> notify,
     Func<BitmapSource, CancellationToken, Task<string>> recognize,
     Func<string, CancellationToken, Task>? copyText = null, Action<string>? showTranslation = null,
-    Action<BitmapSource, PixelRect>? showPin = null, Func<BitmapSource, Task>? copyImage = null)
+    Action<BitmapSource, PixelRect>? showPin = null, Func<BitmapSource, CancellationToken, Task>? copyImage = null,
+    IReadOnlyList<PixelRect>? windowTargets = null, Action<PixelRect, BitmapSource>? showScroll = null)
 {
     internal DesktopSnapshot Snapshot { get; } = snapshot;
     internal SelectionModel Selection { get; } = new(snapshot.Bounds);
     internal Annotations Annotations { get; } = new();
     internal AnnotationKind? Tool { get; private set; }
     internal bool Annotating => Tool != null;
-    internal bool Dragging => Selection.Dragging || Annotations.Dragging;
+    internal bool Dragging => pendingWindowClick || Selection.Dragging || Annotations.Dragging;
+    internal bool AutoSelecting { get; private set; } = windowTargets != null;
+    internal PixelRect WindowPreview { get; private set; }
+    internal PixelRect DisplayRectangle => AutoSelecting ? WindowPreview : Selection.Rectangle;
     internal PixelPoint Pointer { get; private set; } = new(snapshot.Bounds.Left, snapshot.Bounds.Top);
     internal bool Busy { get; private set; }
     internal bool Recognizing { get; private set; }
     internal string Status { get; private set; } = "";
-    private CancellationTokenSource? recognitionCancellation;
+    private CancellationTokenSource? outputCancellation;
     private readonly List<OverlayWindow> windows = [];
     private bool closed;
+    private readonly PixelRect[] targets = windowTargets?.Select(r => r.Intersect(snapshot.Bounds)).Where(r => !r.IsEmpty).ToArray() ?? [];
+    private bool pendingWindowClick;
+    private PixelPoint clickAnchor;
+    private int dragThreshold;
 
     internal void Show()
     {
         Pointer = Native.CursorPosition();
+        HoverWindow(Pointer);
         foreach (var screen in Snapshot.Monitors)
         {
             var window = new OverlayWindow(this, screen);
@@ -44,6 +53,7 @@ internal sealed class CaptureSession(DesktopSnapshot snapshot, Action finished, 
 
     internal (bool Selection, SelectionHit Hit) HitTest(PixelPoint p, int tolerance)
     {
+        if (AutoSelecting) return (true, SelectionHit.None);
         var hit = Selection.HitTest(p, tolerance);
         if (!Annotating || Selection.Rectangle.IsEmpty || (hit != SelectionHit.None && hit != SelectionHit.Move))
             return (true, hit);
@@ -55,6 +65,11 @@ internal sealed class CaptureSession(DesktopSnapshot snapshot, Action finished, 
         if (Busy || closed || Dragging) return;
         Status = "";
         Pointer = p;
+        if (AutoSelecting)
+        {
+            HoverWindow(p); clickAnchor = p; dragThreshold = Math.Max(1, tolerance); pendingWindowClick = true;
+            Refresh(); return;
+        }
         if (HitTest(p, tolerance).Selection)
         { Annotations.Deselect(); Selection.Begin(p, tolerance); }
         else if (Tool is { } kind) Annotations.Begin(p, Selection.Rectangle, tolerance, kind);
@@ -66,22 +81,68 @@ internal sealed class CaptureSession(DesktopSnapshot snapshot, Action finished, 
     internal void Move(PixelPoint p, bool square = false)
     {
         if (Busy || closed) return;
+        var previousPointer = Pointer;
+        var previousRectangle = DisplayRectangle;
         Pointer = p;
+        if (AutoSelecting)
+        {
+            if (!pendingWindowClick)
+            {
+                HoverWindow(p);
+                RefreshPointer(previousPointer, previousRectangle);
+                return;
+            }
+            if (Math.Abs((long)p.X - clickAnchor.X) < dragThreshold && Math.Abs((long)p.Y - clickAnchor.Y) < dragThreshold) return;
+            pendingWindowClick = false; AutoSelecting = false; WindowPreview = default;
+            Selection.Select(default); Selection.Begin(clickAnchor, 0);
+        }
         if (Selection.Dragging) Selection.Update(p);
         else if (Annotations.Dragging) Annotations.Update(p, square);
-        Refresh();
+        if (Dragging) { foreach (var window in windows) window.RefreshSurface(); }
+        else RefreshPointer(previousPointer, previousRectangle);
+    }
+
+    private void RefreshPointer(PixelPoint previousPointer, PixelRect previousRectangle)
+    {
+        foreach (var window in windows)
+        {
+            bool moved = previousPointer != Pointer;
+            bool wasInside = window.Screen.Contains(previousPointer), inside = window.Screen.Contains(Pointer);
+            if (previousRectangle != DisplayRectangle ||
+                (DisplayRectangle.IsEmpty && moved && (wasInside || inside)) ||
+                (AutoSelecting && wasInside != inside))
+                window.RefreshSurface();
+        }
     }
 
     internal void End(PixelPoint p, bool square = false)
     {
         if (Busy || closed) return;
         Pointer = p;
+        if (pendingWindowClick)
+        {
+            Move(p, square);
+            if (pendingWindowClick)
+            {
+                pendingWindowClick = false;
+                Selection.Select(WindowPreview);
+                AutoSelecting = Selection.Rectangle.IsEmpty;
+                WindowPreview = default;
+                if (AutoSelecting) HoverWindow(p);
+            }
+        }
         if (Selection.Dragging) Selection.End(p);
         else if (Annotations.Dragging) Annotations.End(p, square);
         Refresh();
         if (Selection.Rectangle.IsEmpty) return;
         var current = windows.FirstOrDefault(w => w.Screen.Contains(p)) ?? windows.FirstOrDefault(w => !w.Screen.Intersect(Selection.Rectangle).IsEmpty);
         current?.Activate(); current?.ShowToolbar();
+    }
+
+    private void HoverWindow(PixelPoint p)
+    {
+        if (!AutoSelecting || pendingWindowClick) return;
+        WindowPreview = targets.FirstOrDefault(r => r.Contains(p));
     }
 
     internal void SetTool(AnnotationKind? kind)
@@ -112,6 +173,25 @@ internal sealed class CaptureSession(DesktopSnapshot snapshot, Action finished, 
 
     internal BitmapSource CreateOutput() => AnnotationRenderer.Compose(Snapshot, Selection.Rectangle, Annotations.Items);
 
+    internal void StartScroll()
+    {
+        if (Busy || Dragging || Selection.Rectangle.IsEmpty || closed) return;
+        var region = Selection.Rectangle;
+        if (Annotations.Items.Count != 0)
+        { Status = "请先撤销标注再开始长截图，避免标注随页面重复。"; Refresh(); return; }
+        if (region.Width < 32 || region.Height < 64 || (long)region.Width * region.Height > ScrollStitcher.MaxPixels ||
+            !Snapshot.Monitors.Any(m => region.Intersect(m) == region))
+        { Status = "请在同一显示器内框选至少 32 × 64 px 的滚动内容区，并缩小过大的选区。"; Refresh(); return; }
+        Busy = true;
+        try
+        {
+            if (showScroll == null) throw new InvalidOperationException("长截图入口不可用。");
+            showScroll(region, Snapshot.Crop(region)); Close();
+        }
+        catch (Exception ex) { if (!closed) { Status = "无法开始长截图，选区已保留。" + ex.Message; Refresh(); } }
+        finally { Busy = false; if (!closed) Refresh(); }
+    }
+
     internal void Pin()
     {
         if (Busy || Dragging || Selection.Rectangle.IsEmpty || closed) return;
@@ -139,19 +219,21 @@ internal sealed class CaptureSession(DesktopSnapshot snapshot, Action finished, 
     {
         if (Busy || Dragging || Selection.Rectangle.IsEmpty || closed) return;
         Busy = true;
+        using var cancellation = new CancellationTokenSource();
+        outputCancellation = cancellation;
         try
         {
             var image = CreateOutput();
-            if (copyImage != null) await copyImage(image);
-            else await ImageOutput.Copy(image);
+            await (copyImage ?? ImageOutput.Copy)(image, cancellation.Token);
             if (!closed) { Close(); notify("已复制截图", "可以粘贴到聊天、文档或图片编辑器。"); }
         }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
         catch (Exception ex)
         {
             if (!closed) MessageBox.Show(owner, "复制失败，请重试。选区已保留。\n" + ex.Message,
                 "Snap Tool", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
-        finally { Busy = false; }
+        finally { outputCancellation = null; Busy = false; }
     }
 
     internal void Save(OverlayWindow owner)
@@ -182,7 +264,7 @@ internal sealed class CaptureSession(DesktopSnapshot snapshot, Action finished, 
         if (Busy || Dragging || Selection.Rectangle.IsEmpty || closed) return;
         Busy = true; Recognizing = true; Status = "正在识别文字… Esc 取消";
         using var cancellation = new CancellationTokenSource();
-        recognitionCancellation = cancellation;
+        outputCancellation = cancellation;
         Refresh();
         try
         {
@@ -211,7 +293,7 @@ internal sealed class CaptureSession(DesktopSnapshot snapshot, Action finished, 
         }
         finally
         {
-            recognitionCancellation = null;
+            outputCancellation = null;
             Busy = false; Recognizing = false;
             if (!closed) Refresh();
         }
@@ -220,7 +302,7 @@ internal sealed class CaptureSession(DesktopSnapshot snapshot, Action finished, 
     internal void Close()
     {
         if (closed) return;
-        closed = true; recognitionCancellation?.Cancel(); Selection.StopDragging();
+        closed = true; pendingWindowClick = false; outputCancellation?.Cancel(); Selection.StopDragging();
         foreach (var window in windows.ToArray()) window.Close();
         windows.Clear(); finished();
     }

@@ -20,11 +20,18 @@ internal sealed class OverlayWindow : Window
     private readonly Canvas canvas;
     private readonly Border toolbar;
     private readonly List<Button> outputButtons = [];
-    private Button rectangleButton = null!, arrowButton = null!, undoButton = null!, deleteButton = null!;
+    private Button rectangleButton = null!, arrowButton = null!, undoButton = null!;
     private readonly ComboBox colorBox = new() { Width = 82, Margin = new Thickness(4), VerticalContentAlignment = VerticalAlignment.Center };
     private readonly ComboBox thicknessBox = new() { Width = 70, Margin = new Thickness(4), VerticalContentAlignment = VerticalAlignment.Center };
     private StackPanel stylePanel = null!;
     private bool updatingStyle;
+    private static readonly Brush ToolBackground = CreateToolBackground();
+
+    private static Brush CreateToolBackground()
+    {
+        var brush = new SolidColorBrush(Color.FromRgb(40, 50, 70));
+        brush.Freeze(); return brush;
+    }
     private static readonly (string Name, uint Rgb)[] Colors = [("红色", 0xFF4545), ("黄色", 0xFFD447), ("绿色", 0x38D996), ("蓝色", 0x409CFF), ("白色", 0xFFFFFF), ("黑色", 0x000000)];
     private readonly TextBlock status = new() { Foreground = Brushes.White, FontSize = 12,
         MaxWidth = 480, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(10, 4, 10, 6), Visibility = Visibility.Collapsed };
@@ -62,9 +69,10 @@ internal sealed class OverlayWindow : Window
     private Border CreateToolbar()
     {
         var panel = new StackPanel { Orientation = Orientation.Horizontal };
-        outputButtons.Add(AddButton(panel, "复制 Ctrl+C", "复制图片，Ctrl+C 或 Enter", async () => await session.Copy(this), true));
-        outputButtons.Add(AddButton(panel, "贴图 Ctrl+T", "当前选区置顶贴图，Ctrl+T 或 F3", session.Pin));
-        outputButtons.Add(AddButton(panel, "识别文字", "识别文字，Shift+C", async () => await session.RecognizeText()));
+        outputButtons.Add(AddButton(panel, "复制", "复制图片，Ctrl+C 或 Enter", async () => await session.Copy(this), true));
+        outputButtons.Add(AddButton(panel, "贴图", "当前选区置顶贴图，Ctrl+T 或 F3", session.Pin));
+        outputButtons.Add(AddButton(panel, "长截图", "手动向下滚动并拼接截图", session.StartScroll));
+        outputButtons.Add(AddButton(panel, "OCR", "识别文字，Shift+C", async () => await session.RecognizeText()));
         outputButtons.Add(AddButton(panel, "翻译", "有道文本翻译，Shift+T", async () => await session.RecognizeText(true)));
         outputButtons.Add(AddButton(panel, "保存", "保存 PNG，Ctrl+S", () => session.Save(this)));
         AddButton(panel, "取消", "取消截图，Esc", () => session.Close());
@@ -72,15 +80,15 @@ internal sealed class OverlayWindow : Window
         rectangleButton = AddButton(tools, "矩形", "绘制矩形；Shift 正方形；再次点击退出绘制", () => session.ToggleTool(AnnotationKind.Rectangle));
         arrowButton = AddButton(tools, "箭头", "绘制箭头；Shift 限制方向；再次点击退出绘制", () => session.ToggleTool(AnnotationKind.Arrow));
         undoButton = AddButton(tools, "撤销", "撤销标注，Ctrl+Z", session.UndoAnnotation);
-        deleteButton = AddButton(tools, "删除", "删除选中标注，Delete", session.DeleteAnnotation);
-        outputButtons.AddRange([rectangleButton, arrowButton, undoButton, deleteButton]);
+        outputButtons.AddRange([rectangleButton, arrowButton, undoButton]);
         stylePanel = new StackPanel { Orientation = Orientation.Horizontal, Visibility = Visibility.Collapsed };
         stylePanel.Children.Add(new TextBlock { Text = "颜色", Foreground = Brushes.White, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 2, 0) });
         foreach (var color in Colors) colorBox.Items.Add(new ComboBoxItem { Content = color.Name, Tag = color.Rgb });
         colorBox.SelectedIndex = 0; stylePanel.Children.Add(colorBox);
         stylePanel.Children.Add(new TextBlock { Text = "粗细", Foreground = Brushes.White, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 2, 0) });
         foreach (int width in new[] { 2, 3, 5, 8 }) thicknessBox.Items.Add(new ComboBoxItem { Content = width + " px", Tag = width });
-        thicknessBox.SelectedIndex = 1; stylePanel.Children.Add(thicknessBox);
+        foreach (ComboBoxItem item in thicknessBox.Items) if ((int)item.Tag == session.Annotations.Thickness) thicknessBox.SelectedItem = item;
+        stylePanel.Children.Add(thicknessBox);
         colorBox.SelectionChanged += (_, _) => ChangeStyle();
         thicknessBox.SelectionChanged += (_, _) => ChangeStyle();
         var content = new StackPanel(); content.Children.Add(panel); content.Children.Add(tools); content.Children.Add(stylePanel); content.Children.Add(status);
@@ -105,7 +113,7 @@ internal sealed class OverlayWindow : Window
         {
             Content = label, ToolTip = tooltip, FontSize = 13, FontFamily = new FontFamily("Microsoft YaHei UI"),
             Padding = new Thickness(15, 8, 15, 8), Margin = new Thickness(2), BorderThickness = new Thickness(0),
-            Background = new SolidColorBrush(primary ? Color.FromRgb(92, 228, 197) : Color.FromRgb(40, 50, 70)),
+            Background = primary ? new SolidColorBrush(Color.FromRgb(92, 228, 197)) : ToolBackground,
             Foreground = primary ? new SolidColorBrush(Color.FromRgb(13, 40, 36)) : Brushes.White,
             Cursor = Cursors.Hand
         };
@@ -142,14 +150,15 @@ internal sealed class OverlayWindow : Window
         Canvas.SetTop(toolbar, Math.Clamp(y, 10, Math.Max(10, ActualHeight - toolbar.DesiredSize.Height - 10)));
     }
 
+    internal void RefreshSurface() => surface.InvalidateVisual();
+
     internal void Refresh()
     {
         surface.InvalidateVisual();
         foreach (var button in outputButtons) { button.IsEnabled = !session.Busy; button.Opacity = session.Busy ? 0.5 : 1; }
         undoButton.IsEnabled = !session.Busy && session.Annotations.CanUndo;
-        deleteButton.IsEnabled = !session.Busy && session.Annotating && session.Annotations.Selected != null;
-        rectangleButton.Background = session.Tool == AnnotationKind.Rectangle ? Brushes.Teal : new SolidColorBrush(Color.FromRgb(40, 50, 70));
-        arrowButton.Background = session.Tool == AnnotationKind.Arrow ? Brushes.Teal : new SolidColorBrush(Color.FromRgb(40, 50, 70));
+        rectangleButton.Background = session.Tool == AnnotationKind.Rectangle ? Brushes.Teal : ToolBackground;
+        arrowButton.Background = session.Tool == AnnotationKind.Arrow ? Brushes.Teal : ToolBackground;
         stylePanel.Visibility = session.Annotating ? Visibility.Visible : Visibility.Collapsed;
         colorBox.IsEnabled = thicknessBox.IsEnabled = !session.Busy;
         updatingStyle = true;
@@ -186,7 +195,9 @@ internal sealed class OverlayWindow : Window
         { e.Handled = true; await session.RecognizeText(); }
         else if (e.Key == Key.T && modifiers == ModifierKeys.Shift)
         { e.Handled = true; await session.RecognizeText(true); }
-        else if (e.Key == Key.Enter && e.OriginalSource is not Button)
+        else if (e.Key == Key.Enter && modifiers == ModifierKeys.None &&
+            !toolbar.IsKeyboardFocusWithin && !colorBox.IsDropDownOpen && !thicknessBox.IsDropDownOpen &&
+            (e.OriginalSource == null || e.OriginalSource == this || e.OriginalSource == surface))
         { e.Handled = true; await session.Copy(this); }
         else if (e.Key == Key.S && modifiers == ModifierKeys.Control)
         { e.Handled = true; session.Save(this); }
@@ -250,7 +261,7 @@ internal sealed class SelectionSurface : FrameworkElement
         if (ActualWidth <= 0 || ActualHeight <= 0) return;
         var viewport = new Rect(0, 0, ActualWidth, ActualHeight);
         dc.DrawImage(background, viewport);
-        var selected = session.Selection.Rectangle;
+        var selected = session.DisplayRectangle;
         var screen = window.Screen;
         double sx = ActualWidth / screen.Width, sy = ActualHeight / screen.Height;
         if (!selected.IsEmpty)
@@ -270,7 +281,7 @@ internal sealed class SelectionSurface : FrameworkElement
                 }
             dc.Pop();
             dc.DrawRectangle(null, new Pen(Accent, 1.5), r);
-            if (!session.Dragging)
+            if (!session.Dragging && !session.AutoSelecting)
             {
                 foreach (double x in new[] { r.Left, (r.Left + r.Right) / 2, r.Right })
                     foreach (double y in new[] { r.Top, (r.Top + r.Bottom) / 2, r.Bottom })
@@ -299,6 +310,8 @@ internal sealed class SelectionSurface : FrameworkElement
             }
             DrawHint(dc, "SNAP TOOL   /   区域截图", "拖动框选区域 · Esc 或右键取消", 32);
         }
+        if (session.AutoSelecting && !selected.IsEmpty && screen.Contains(session.Pointer))
+            DrawHint(dc, "自动识别窗口", "单击固定窗口选区 · 拖动自行框选 · Esc 或右键取消", 32);
     }
 
     private FormattedText Text(string value, double size, Brush brush) =>

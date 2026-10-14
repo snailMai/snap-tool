@@ -27,6 +27,12 @@ internal static class Native
     internal static extern IntPtr GetDC(IntPtr window);
     [DllImport("user32.dll")]
     internal static extern int ReleaseDC(IntPtr window, IntPtr dc);
+    [DllImport("user32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool SetWindowDisplayAffinity(IntPtr window, uint affinity);
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW", SetLastError = true)]
+    internal static extern IntPtr GetWindowLongPtr(IntPtr window, int index);
+    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW", SetLastError = true)]
+    internal static extern IntPtr SetWindowLongPtr(IntPtr window, int index, IntPtr value);
     [DllImport("gdi32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool BitBlt(IntPtr target, int x, int y, int width, int height, IntPtr source, int sourceX, int sourceY, uint operation);
     [DllImport("user32.dll")]

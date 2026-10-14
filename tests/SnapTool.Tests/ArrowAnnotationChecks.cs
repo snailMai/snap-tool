@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using SnapTool;
@@ -144,7 +145,8 @@ internal static class ArrowAnnotationChecks
         });
         test("cropping arrow head does not create a new head on crop boundary", () =>
         {
-            var marks = Mark(AnnotationKind.Arrow, new(-50, 30), new(150, 30)).Items;
+            var model = Mark(AnnotationKind.Arrow, new(-50, 30), new(150, 30)); model.SetStyle(0xFF4545, 3);
+            var marks = model.Items;
             var output = AnnotationRenderer.Compose(Snapshot(), new(0, 0, 100, 100), marks);
             Assert(Pixel(output, 98, 30) == 0xFF4545 && Pixel(output, 98, 26) == 0xFFFFFF);
             Assert(marks.Single().End == new PixelPoint(150, 30));
@@ -237,7 +239,7 @@ internal static class ArrowAnnotationChecks
                 s.Begin(new(0, 0), 2); s.End(new(100, 50));
                 Find("箭头").RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); Assert(s.Tool == AnnotationKind.Arrow);
                 s.Begin(new(0, 100), 2); s.End(new(100, 100));
-                Find("删除").RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); Assert(s.Annotations.Items.Count == 1);
+                ShortcutChecks.Press(window, Key.Delete, ModifierKeys.None).GetAwaiter().GetResult(); Assert(s.Annotations.Items.Count == 1);
                 Find("撤销").RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); Assert(s.Annotations.Items.Count == 2);
                 foreach (var (name, kind) in new[] { ("矩形", AnnotationKind.Rectangle), ("箭头", AnnotationKind.Arrow) })
                 {

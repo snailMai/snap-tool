@@ -1,4 +1,4 @@
-param([switch]$Publish, [string]$PublishDirectory = 'dist/SnapTool')
+param([switch]$Publish, [string]$PublishDirectory = 'dist/SnapTool', [switch]$DesktopChecks)
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $dotnet = Join-Path $projectRoot '.tools\dotnet\dotnet.exe'
@@ -18,6 +18,15 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Build failed.' }
     & $dotnet run --project tests/SnapTool.Tests/SnapTool.Tests.csproj -c Release --no-build
     if ($LASTEXITCODE -ne 0) { throw 'Regression checks failed.' }
+    Write-Host 'PASS automatic regression checks'
+    if ($DesktopChecks) {
+        foreach ($check in @('--pin-window-checks', '--window-selection-checks', '--scroll-window-checks')) {
+            & $dotnet run --project tests/SnapTool.Tests/SnapTool.Tests.csproj -c Release --no-build -- $check
+            if ($LASTEXITCODE -ne 0) { throw "Desktop check failed: $check" }
+            Write-Host "PASS desktop check: $check"
+        }
+    }
+    else { Write-Host 'SKIP desktop checks (use -DesktopChecks on an interactive desktop)' }
     if ($Publish) {
         & $dotnet restore src/SnapTool/SnapTool.csproj -r win-x64 -p:SelfContained=true --locked-mode --configfile NuGet.Config --nologo
         if ($LASTEXITCODE -ne 0) { throw 'Runtime restore failed.' }

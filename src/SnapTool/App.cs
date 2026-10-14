@@ -5,7 +5,9 @@ using System.Linq;
 using System.Threading;
 using System.Windows;
 using System.Windows.Interop;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
+using SnapTool.Core;
 using Forms = System.Windows.Forms;
 
 namespace SnapTool;
@@ -18,6 +20,7 @@ internal sealed class App : Application
     private Forms.NotifyIcon? tray;
     private Icon? icon;
     private CaptureSession? session;
+    private ScrollCaptureWindow? scrollCapture;
     private bool registered;
     private readonly OcrService ocr = new();
     private readonly TranslationSettings translationSettings = new();
@@ -32,6 +35,7 @@ internal sealed class App : Application
         app.DispatcherUnhandledException += (_, e) =>
         {
             app.session?.Close();
+            app.scrollCapture?.Close();
             MessageBox.Show("操作失败，请重试。\n" + e.Exception.Message, "Snap Tool", MessageBoxButton.OK, MessageBoxImage.Error);
             e.Handled = true;
         };
@@ -100,8 +104,12 @@ internal sealed class App : Application
     private IntPtr WindowMessage(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
         if (message == 0x0312 && wParam.ToInt32() == HotkeyId)
-        { handled = true; QueueCapture(); }
-        else if (message == 0x007E) { session?.Close(); pins.Reposition(); } // Display topology changed.
+        {
+            handled = true;
+            if (scrollCapture != null) _ = scrollCapture.Finish();
+            else QueueCapture();
+        }
+        else if (message == 0x007E) { session?.Close(); scrollCapture?.Close(); pins.Reposition(); } // Display topology changed.
         else if (message == 0x0011) { session?.Close(); Shutdown(); } // Session ending.
         return IntPtr.Zero;
     }
@@ -109,7 +117,7 @@ internal sealed class App : Application
     private bool queued;
     private void QueueCapture()
     {
-        if (session != null || queued) return;
+        if (session != null || scrollCapture != null || queued) return;
         queued = true;
         Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(async () =>
         {
@@ -119,11 +127,15 @@ internal sealed class App : Application
                 await System.Threading.Tasks.Task.Delay(100);
                 if (source == null) return;
                 // Capture visible pins, then hide their interactive windows behind the capture overlay.
+                var windowTargets = WindowTargets.Capture();
                 var snapshot = DesktopSnapshot.Capture();
                 pins.Suspend();
-                session = new CaptureSession(snapshot, () => { session = null; pins.Resume(); },
+                session = new CaptureSession(snapshot, () => { session = null; if (scrollCapture == null) pins.Resume(); },
                     (title, text) => Notify(title, text), ocr.Recognize, showTranslation: ShowTranslation,
-                    showPin: (image, rectangle) => pins.Add(image, rectangle));
+                    showPin: (image, rectangle) => pins.Add(image, rectangle),
+                    windowTargets: windowTargets.Select(target => target.Bounds).ToArray(),
+                    showScroll: (region, image) => ShowScrollCapture(region, image,
+                        windowTargets.FirstOrDefault(w => w.Bounds.Contains(new(region.Left + region.Width / 2, region.Top + region.Height / 2)))));
                 session.Show();
             }
             catch (Exception ex)
@@ -136,6 +148,24 @@ internal sealed class App : Application
     }
 
     private void Notify(string title, string text) => tray?.ShowBalloonTip(2000, title, text, Forms.ToolTipIcon.Info);
+
+    private void ShowScrollCapture(PixelRect region, BitmapSource first, WindowTarget target)
+    {
+        if (target.Handle == IntPtr.Zero || target.Bounds.Intersect(region) != region)
+            throw new InvalidOperationException("请将选区完整放在同一个窗口的滚动内容区内。");
+        var window = new ScrollCaptureWindow(region, first,
+            async (image, warning, token) =>
+            {
+                await ImageOutput.Copy(image, token);
+                token.ThrowIfCancellationRequested();
+                Notify("长截图已复制", warning.Length == 0 ? "可直接粘贴到其他应用。" : "已复制成功拼接的部分。" + warning);
+            },
+            canCapture: () => scrollCapture != null && WindowTargets.CanCaptureRegion(target, region, scrollCapture.CaptureWindows));
+        scrollCapture = window;
+        window.Closed += (_, _) => { if (scrollCapture == window) scrollCapture = null; if (session == null) pins.Resume(); };
+        try { window.Start(); }
+        catch { window.Close(); throw; }
+    }
 
     private void ShowTranslationSettings(Window? owner)
     {
@@ -154,6 +184,7 @@ internal sealed class App : Application
     protected override void OnExit(ExitEventArgs e)
     {
         pins.CloseAll();
+        scrollCapture?.Close();
         session?.Close();
         ocr.Dispose();
         translator.Dispose();

@@ -24,18 +24,20 @@ internal static class ImageOutput
         }
     }
 
-    internal static async Task Copy(BitmapSource image, CancellationToken token = default)
+    internal static Task Copy(BitmapSource image, CancellationToken token = default) =>
+        CopyWithRetry(image, token, value =>
+        {
+            var data = new DataObject();
+            data.SetImage(value);
+            Clipboard.SetDataObject(data, true);
+        });
+
+    internal static async Task CopyWithRetry(BitmapSource image, CancellationToken token, Action<BitmapSource> write)
     {
         for (int attempt = 0; ; attempt++)
         {
             token.ThrowIfCancellationRequested();
-            try
-            {
-                var data = new DataObject();
-                data.SetImage(image);
-                Clipboard.SetDataObject(data, true);
-                return;
-            }
+            try { write(image); return; }
             catch (ExternalException) when (attempt < 3) { await Task.Delay(80, token); }
         }
     }
