@@ -20,7 +20,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Regression checks failed.' }
     Write-Host 'PASS automatic regression checks'
     if ($DesktopChecks) {
-        foreach ($check in @('--pin-window-checks', '--window-selection-checks', '--scroll-window-checks', '--recording-window-checks')) {
+        foreach ($check in @('--pin-window-checks', '--window-selection-checks', '--scroll-window-checks', '--recording-window-checks', '--translation-window-checks', '--text-window-checks')) {
             & $dotnet run --project tests/SnapTool.Tests/SnapTool.Tests.csproj -c Release --no-build -- $check
             if ($LASTEXITCODE -ne 0) { throw "Desktop check failed: $check" }
             Write-Host "PASS desktop check: $check"

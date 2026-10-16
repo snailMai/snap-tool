@@ -30,6 +30,7 @@ internal sealed class CaptureSession(DesktopSnapshot snapshot, Action finished, 
     internal PixelPoint Pointer { get; private set; } = new(snapshot.Bounds.Left, snapshot.Bounds.Top);
     internal bool Busy { get; private set; }
     internal bool Recognizing { get; private set; }
+    internal OverlayWindow? TextEditor { get; private set; }
     internal string Status { get; private set; } = "";
     private CancellationTokenSource? outputCancellation;
     private readonly List<OverlayWindow> windows = [];
@@ -64,6 +65,7 @@ internal sealed class CaptureSession(DesktopSnapshot snapshot, Action finished, 
 
     internal void Begin(PixelPoint p, int tolerance)
     {
+        FinishTextEditing();
         if (Busy || closed || Dragging) return;
         Status = "";
         Pointer = p;
@@ -149,6 +151,7 @@ internal sealed class CaptureSession(DesktopSnapshot snapshot, Action finished, 
 
     internal void SetTool(AnnotationKind? kind)
     {
+        FinishTextEditing();
         if (Busy || closed || Dragging || Selection.Rectangle.IsEmpty) return;
         Tool = kind; Annotations.Deselect(); Status = ""; Refresh();
     }
@@ -161,22 +164,61 @@ internal sealed class CaptureSession(DesktopSnapshot snapshot, Action finished, 
         Annotations.SetStyle(rgb, thickness, Tool ?? AnnotationKind.Rectangle); Refresh();
     }
 
+    internal bool TryEditText(OverlayWindow window, PixelPoint point, int tolerance, bool editExisting = false)
+    {
+        if (Busy || closed || Dragging || !Annotating || !Selection.Rectangle.Contains(point) || HitTest(point, tolerance).Selection) return false;
+        FinishTextEditing();
+        var hit = Annotations.HitTest(point, tolerance);
+        if (!(editExisting && hit.Index >= 0 && Annotations.Items[hit.Index].Kind == AnnotationKind.Text) &&
+            !(Tool == AnnotationKind.Text && hit.Index < 0)) return false;
+        Annotations.BeginText(point, hit.Index);
+        TextEditor = window; window.OpenTextEditor(); Refresh(); return true;
+    }
+
+    internal void UpdateText(string text)
+    {
+        if (!Annotations.EditingText || closed) return;
+        Annotations.UpdateText(text, TextAnnotationRenderer.Measure(text, Annotations.TextStyle)); Refresh();
+    }
+
+    internal void SetTextStyle(TextAnnotationStyle style)
+    {
+        if (Busy || closed || Dragging) return;
+        var text = Annotations.Selected is { Kind: AnnotationKind.Text } mark ? mark.Text : "";
+        Annotations.SetTextStyle(style, TextAnnotationRenderer.Measure(text, style)); Refresh();
+    }
+
+    internal void FinishTextEditing(bool cancel = false)
+    {
+        if (TextEditor == null) return;
+        var owner = TextEditor; TextEditor = null;
+        owner.CloseTextEditor(); Annotations.EndText(cancel);
+        if (!closed) Refresh();
+    }
+
     internal void UndoAnnotation()
     {
+        FinishTextEditing();
         if (Busy || closed || Dragging) return;
         Annotations.Undo(); Mosaic.Retain(Annotations.Items); Refresh();
     }
 
     internal void DeleteAnnotation()
     {
+        FinishTextEditing();
         if (Busy || closed || Dragging || !Annotating) return;
         Annotations.Delete(); Mosaic.Retain(Annotations.Items); Refresh();
     }
 
-    internal BitmapSource CreateOutput() => AnnotationRenderer.Compose(Snapshot, Selection.Rectangle, Annotations.Items, Mosaic);
+    internal BitmapSource CreateOutput()
+    {
+        FinishTextEditing();
+        return AnnotationRenderer.Compose(Snapshot, Selection.Rectangle, Annotations.Items, Mosaic);
+    }
 
     internal void StartRecording()
     {
+        FinishTextEditing();
         if (Busy || Dragging || Selection.Rectangle.IsEmpty || closed) return;
         if (Annotations.Items.Count != 0) { Status = "请先撤销标注再录屏；录屏不叠加截图标注。"; Refresh(); return; }
         var region = Selection.Rectangle;
@@ -194,6 +236,7 @@ internal sealed class CaptureSession(DesktopSnapshot snapshot, Action finished, 
 
     internal void StartScroll()
     {
+        FinishTextEditing();
         if (Busy || Dragging || Selection.Rectangle.IsEmpty || closed) return;
         var region = Selection.Rectangle;
         if (Annotations.Items.Count != 0)
@@ -213,6 +256,7 @@ internal sealed class CaptureSession(DesktopSnapshot snapshot, Action finished, 
 
     internal void Pin()
     {
+        FinishTextEditing();
         if (Busy || Dragging || Selection.Rectangle.IsEmpty || closed) return;
         Busy = true; Status = "";
         try
@@ -236,6 +280,7 @@ internal sealed class CaptureSession(DesktopSnapshot snapshot, Action finished, 
 
     internal async Task Copy(OverlayWindow owner)
     {
+        FinishTextEditing();
         if (Busy || Dragging || Selection.Rectangle.IsEmpty || closed) return;
         Busy = true;
         using var cancellation = new CancellationTokenSource();
@@ -257,6 +302,7 @@ internal sealed class CaptureSession(DesktopSnapshot snapshot, Action finished, 
 
     internal void Save(OverlayWindow owner)
     {
+        FinishTextEditing();
         if (Busy || Dragging || Selection.Rectangle.IsEmpty || closed) return;
         Busy = true;
         try
@@ -280,6 +326,7 @@ internal sealed class CaptureSession(DesktopSnapshot snapshot, Action finished, 
 
     internal async Task RecognizeText(bool translate = false)
     {
+        FinishTextEditing();
         if (Busy || Dragging || Selection.Rectangle.IsEmpty || closed) return;
         Busy = true; Recognizing = true; Status = "正在识别文字… Esc 取消";
         using var cancellation = new CancellationTokenSource();
@@ -322,6 +369,7 @@ internal sealed class CaptureSession(DesktopSnapshot snapshot, Action finished, 
     {
         if (closed) return;
         closed = true; pendingWindowClick = false; outputCancellation?.Cancel(); Selection.StopDragging();
+        FinishTextEditing(true);
         foreach (var window in windows.ToArray()) window.Close();
         windows.Clear(); Mosaic.Clear(); finished();
     }

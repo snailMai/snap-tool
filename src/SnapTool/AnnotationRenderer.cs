@@ -21,6 +21,8 @@ internal static class AnnotationRenderer
             }
             var r = mark.Rectangle;
             var brush = new SolidColorBrush(Color.FromRgb((byte)(mark.Rgb >> 16), (byte)(mark.Rgb >> 8), (byte)mark.Rgb));
+            if (mark.Kind == AnnotationKind.Text)
+            { TextAnnotationRenderer.Draw(dc, mark, brush); continue; }
             if (mark.Kind == AnnotationKind.Number)
             {
                 double radius = mark.NumberRadius;

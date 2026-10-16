@@ -232,9 +232,9 @@ internal static class ArrowAnnotationChecks
             try
             {
                 var toolbar = (Border)((Canvas)((Grid)window.Content).Children[1]).Children[0];
-                var tools = (StackPanel)((StackPanel)toolbar.Child).Children[1];
-                Button Find(string text) => tools.Children.OfType<Button>().Single(b => Equals(b.Content, text));
-                Assert(!tools.Children.OfType<Button>().Any(b => Equals(b.Content, "直线")));
+                var tools = (StackPanel)((WrapPanel)((StackPanel)toolbar.Child).Children[0]).Children[0];
+                Button Find(string text) => tools.Children.OfType<Button>().Single(b => Equals(b.Tag, text));
+                Assert(!tools.Children.OfType<Button>().Any(b => Equals(b.Tag, "直线")));
                 Find("矩形").RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); Assert(s.Tool == AnnotationKind.Rectangle);
                 s.Begin(new(0, 0), 2); s.End(new(100, 50));
                 Find("箭头").RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); Assert(s.Tool == AnnotationKind.Arrow);

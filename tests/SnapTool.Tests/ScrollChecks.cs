@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using SnapTool;
@@ -217,7 +218,7 @@ internal static class ScrollChecks
             session.Selection.Select(Region); var window = new OverlayWindow(session, Region);
             try
             {
-                RefreshChecks.Descendants<Button>((DependencyObject)window.Content).Single(b => Equals(b.Content, "长截图"))
+                RefreshChecks.Descendants<Button>((DependencyObject)window.Content).Single(b => Equals(b.Tag, "长截图"))
                     .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                 session.StartScroll(); Assert(starts == 1 && closes == 1);
             }
@@ -235,9 +236,12 @@ internal static class ScrollChecks
             window.Closed += (_, _) => closes++;
             try
             {
-                var pending = window.Finish(); await entered.Task;
+                foreach (var modifiers in new[] { ModifierKeys.None, ModifierKeys.Shift, ModifierKeys.Control | ModifierKeys.Shift })
+                    await ShortcutChecks.Press(window, Key.C, modifiers);
+                await ShortcutChecks.Press(window, Key.F2, ModifierKeys.Control); Assert(copies == 0);
+                var pending = ShortcutChecks.Press(window, Key.C, ModifierKeys.Control); await entered.Task;
                 Assert(window.LivePreview != null && closes == 0);
-                await window.Finish(); Assert(copies == 1);
+                await ShortcutChecks.Press(window, Key.C, ModifierKeys.Control); Assert(copies == 1);
                 release.SetResult(); await pending;
                 Assert(closes == 1 && window.LivePreview == null && window.ImageHeight == 0);
             }
@@ -251,7 +255,8 @@ internal static class ScrollChecks
                 if (++attempts == 1) { entered.SetResult(); throw new System.Runtime.InteropServices.ExternalException(); }
                 writes++;
             }), () => image);
-            var pending = window.Finish(); await entered.Task; window.Close(); await pending;
+            var pending = ShortcutChecks.Press(window, Key.C, ModifierKeys.Control); await entered.Task;
+            await ShortcutChecks.Press(window, Key.Escape, ModifierKeys.None); await pending;
             Assert(attempts == 1 && writes == 0 && window.LivePreview == null);
         }));
         test("long finish failed copy preserves pixels and allows successful retry", () => OcrChecks.Pump(async () =>
@@ -264,8 +269,8 @@ internal static class ScrollChecks
             }, () => image);
             try
             {
-                await window.Finish(); Assert(window.ImageHeight == ViewHeight && window.LivePreview != null && window.Status.Contains("复制失败"));
-                await window.Finish(); Assert(attempts == 2 && window.LivePreview == null && window.ImageHeight == 0);
+                await ShortcutChecks.Press(window, Key.C, ModifierKeys.Control); Assert(window.ImageHeight == ViewHeight && window.LivePreview != null && window.Status.Contains("复制失败"));
+                await ShortcutChecks.Press(window, Key.C, ModifierKeys.Control); Assert(attempts == 2 && window.LivePreview == null && window.ImageHeight == 0);
             }
             finally { window.Close(); }
         }));

@@ -55,14 +55,22 @@ internal sealed class ScrollCaptureWindow : Window
         actions.Children.Add(new TextBlock { Text = "向下滚动 · 停顿后自动拼接", Foreground = Brushes.DimGray, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0) });
         panel.Children.Add(actions); panel.Children.Add(status);
         Content = new Border { Background = Brushes.White, BorderBrush = ScrollCaptureView.Blue, BorderThickness = new Thickness(1), Child = panel };
-        ToolTip = "每次保留至少四分之一重叠内容；完成或 Ctrl+F2 直接复制，Esc 取消。";
+        ToolTip = "每次保留至少四分之一重叠内容；本窗口内 Ctrl+C 完成并复制，Esc 取消。";
         status.Text = $"已采集 {region.Width} × {region.Height} px，等待滚动。";
         timer.Tick += (_, _) => { if (!processing && !finishing) sampling = SampleOnce(); };
-        PreviewKeyDown += (_, e) => { if (e.Key == Key.Escape) { e.Handled = true; Close(); } };
-        preview.PreviewKeyDown += (_, e) => { if (e.Key == Key.Escape) { e.Handled = true; Close(); } };
+        PreviewKeyDown += OnKey;
+        preview.PreviewKeyDown += OnKey;
         preview.Closed += (_, _) => { if (!closed) Close(); };
         Closed += (_, _) => { closed = true; timer.Stop(); lifetime.Cancel(); lifetime.Dispose(); stitcher = null; candidate = null;
             regionWindow?.Close(); preview.Close(); };
+    }
+
+    private async void OnKey(object sender, KeyEventArgs e) => await HandleKey(e, Keyboard.Modifiers);
+
+    internal async Task HandleKey(KeyEventArgs e, ModifierKeys modifiers)
+    {
+        if (e.Key == Key.Escape) { e.Handled = true; Close(); }
+        else if (e.Key == Key.C && modifiers == ModifierKeys.Control) { e.Handled = true; await Finish(); }
     }
 
     internal void Start()

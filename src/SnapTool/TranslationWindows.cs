@@ -67,15 +67,17 @@ internal sealed class TranslationWindow : Window
     internal TextBox ResultBox { get; } = CreateTextBox(true);
     internal ComboBox TargetBox { get; } = new() { Width = 135, Margin = new Thickness(8, 0, 18, 0), VerticalContentAlignment = VerticalAlignment.Center };
     internal Button TranslateButton { get; }
-    internal Button CancelButton { get; }
     private readonly Button copyResult;
     private readonly TextBlock status;
     private readonly TranslationSession session;
     private readonly CancellationTokenSource lifetime = new();
-    private bool closed;
+    private readonly Func<string, CancellationToken, Task> copyText;
+    private bool closed, closing;
 
-    internal TranslationWindow(string original, Func<string, string, CancellationToken, Task<string>> translate, Action<Window> settings)
+    internal TranslationWindow(string original, Func<string, string, CancellationToken, Task<string>> translate,
+        Func<string, CancellationToken, Task>? copyText = null)
     {
+        this.copyText = copyText ?? ImageOutput.CopyText;
         TranslationUi.Style(this); Title = "Snap Tool · 原文与译文";
         Width = 900; Height = 610; MinWidth = 730; MinHeight = 460;
         session = new TranslationSession(translate);
@@ -93,8 +95,6 @@ internal sealed class TranslationWindow : Window
         TargetBox.Items.Add(new ComboBoxItem { Content = "英文", Tag = "en" }); TargetBox.SelectedIndex = 0;
         actions.Children.Add(TargetBox);
         TranslateButton = TranslationUi.Button("翻译", async () => await Translate(), true); actions.Children.Add(TranslateButton);
-        CancelButton = TranslationUi.Button("取消请求", () => session.Cancel()); actions.Children.Add(CancelButton);
-        actions.Children.Add(TranslationUi.Button("翻译设置", () => { if (!session.Busy) settings(this); }));
         Grid.SetRow(actions, 1); root.Children.Add(actions);
         var columns = new Grid(); columns.ColumnDefinitions.Add(new()); columns.ColumnDefinitions.Add(new() { Width = new GridLength(18) }); columns.ColumnDefinitions.Add(new());
         FrameworkElement Pane(string title, TextBox text, Button copy)
@@ -115,6 +115,14 @@ internal sealed class TranslationWindow : Window
         session.Changed += Refresh;
         Refresh();
         Loaded += async (_, _) => await Translate();
+        Deactivated += (_, _) =>
+        {
+            if (closed || closing) return;
+            // Finish native activation before closing, so the clicked window can receive focus.
+            Dispatcher.BeginInvoke(new Action(() =>
+            { if (!closed && !closing && !IsActive) Close(); }));
+        };
+        Closing += (_, _) => closing = true;
         PreviewKeyDown += (_, e) =>
         { if (e.Key == Key.Escape) { e.Handled = true; if (session.Busy) session.Cancel(); else Close(); } };
         Closed += (_, _) => { closed = true; session.Changed -= Refresh; session.Close(); lifetime.Cancel(); lifetime.Dispose(); };
@@ -132,14 +140,14 @@ internal sealed class TranslationWindow : Window
     {
         if (closed) return;
         SourceBox.IsReadOnly = session.Busy; TargetBox.IsEnabled = !session.Busy;
-        TranslateButton.IsEnabled = !session.Busy; CancelButton.IsEnabled = session.Busy;
+        TranslateButton.IsEnabled = !session.Busy;
         ResultBox.Text = session.Result; status.Text = session.Status;
         copyResult.IsEnabled = !session.Busy && !string.IsNullOrWhiteSpace(session.Result);
     }
     private async Task Copy(string text)
     {
         if (closed || string.IsNullOrWhiteSpace(text)) return;
-        try { await ImageOutput.CopyText(text, lifetime.Token); if (!closed) status.Text = "已复制，可以按 Ctrl+V 粘贴。"; }
+        try { await copyText(text, lifetime.Token); if (!closed) status.Text = "已复制，可以按 Ctrl+V 粘贴。"; }
         catch (OperationCanceledException) when (closed) { }
         catch { if (!closed) status.Text = "复制失败，请稍后重试。"; }
     }

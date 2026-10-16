@@ -62,7 +62,7 @@ internal sealed class App : Application
         var menu = new Forms.ContextMenuStrip();
         menu.Items.Add("截图    Ctrl+F2", null, (_, _) => QueueCapture());
         menu.Items.Add("重新注册 Ctrl+F2", null, (_, _) => RegisterHotkey(true));
-        menu.Items.Add("翻译设置…", null, (_, _) => ShowTranslationSettings(null));
+        menu.Items.Add("翻译设置…", null, (_, _) => ShowTranslationSettings());
         menu.Items.Add("关闭全部贴图", null, (_, _) => pins.CloseAll());
         menu.Items.Add(new Forms.ToolStripSeparator());
         menu.Items.Add("退出", null, async (_, _) => await ExitSafely());
@@ -112,9 +112,7 @@ internal sealed class App : Application
         if (message == 0x0312 && wParam.ToInt32() == HotkeyId)
         {
             handled = true;
-            if (recording != null) _ = recording.Stop();
-            else if (scrollCapture != null) _ = scrollCapture.Finish();
-            else QueueCapture();
+            QueueCapture();
         }
         else if (message == 0x007E) { session?.Close(); scrollCapture?.Close(); if (recording != null) _ = recording.EndForSystemChange(); pins.Reposition(); }
         else if (message == 0x02B1 && wParam.ToInt32() == 7) { if (recording != null) _ = recording.EndForSystemChange(); } // Session locked.
@@ -194,17 +192,16 @@ internal sealed class App : Application
         catch { window.Close(); throw; }
     }
 
-    private void ShowTranslationSettings(Window? owner)
+    private void ShowTranslationSettings()
     {
         var window = new TranslationSettingsWindow(translationSettings);
-        if (owner != null) { window.Owner = owner; window.WindowStartupLocation = WindowStartupLocation.CenterOwner; }
         window.ShowDialog();
     }
 
     private void ShowTranslation(string text)
     {
         var window = new TranslationWindow(text,
-            (original, target, token) => translator.Translate(original, target, translationSettings.Load(), token), ShowTranslationSettings);
+            (original, target, token) => translator.Translate(original, target, translationSettings.Load(), token));
         window.Show(); window.Activate();
     }
 

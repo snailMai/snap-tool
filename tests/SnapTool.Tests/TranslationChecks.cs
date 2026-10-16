@@ -162,7 +162,7 @@ internal static class TranslationChecks
         Check("translation window edits and target changes invalidate result", async () =>
         {
             int calls = 0; string target = "";
-            var window = new TranslationWindow("Hello", (_, language, _) => { calls++; target = language; return Task.FromResult("你好"); }, _ => { });
+            var window = new TranslationWindow("Hello", (_, language, _) => { calls++; target = language; return Task.FromResult("你好"); });
             try
             {
                 window.TranslateButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); await Task.Yield();
@@ -179,7 +179,7 @@ internal static class TranslationChecks
     {
         string dir = Path.Combine(Program.FindRoot(), ".tmp", "translation-preview"); Directory.CreateDirectory(dir);
         var settings = new TranslationSettingsWindow(new TranslationSettings(Path.Combine(dir, "absent.json")));
-        var translation = new TranslationWindow("Please save your changes before closing the window.\n\nError code: 404", (_, _, _) => Task.FromResult("关闭窗口前，请保存更改。\n\n错误代码：404"), _ => { });
+        var translation = new TranslationWindow("Please save your changes before closing the window.\n\nError code: 404", (_, _, _) => Task.FromResult("关闭窗口前，请保存更改。\n\n错误代码：404"));
         try
         {
             translation.TranslateButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));

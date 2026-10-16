@@ -1,10 +1,12 @@
 namespace SnapTool.Core;
 
-public enum AnnotationKind { Rectangle, Arrow, Number, Mosaic }
+public enum AnnotationKind { Rectangle, Arrow, Number, Mosaic, Text }
 
 public sealed record Annotation(AnnotationKind Kind, PixelPoint Start, PixelPoint End, uint Rgb, int Thickness)
 {
     public int Number { get; init; }
+    public string Text { get; init; } = "";
+    public TextAnnotationStyle TextStyle { get; init; } = new();
     public int NumberRadius => 8 + Thickness * 2;
     public Annotation(PixelRect rectangle, uint rgb, int thickness)
         : this(AnnotationKind.Rectangle, new(rectangle.Left, rectangle.Top), new(rectangle.Right, rectangle.Bottom), rgb, thickness) { }
@@ -32,6 +34,7 @@ public sealed class Annotations
     private readonly List<Annotation> items = [];
     private readonly Stack<Annotation[]> history = new();
     private Annotation[]? before;
+    private Annotation[]? textBefore;
     private Annotation originalMark = null!;
     private PixelPoint anchor;
     private PixelRect original, bounds;
@@ -40,16 +43,18 @@ public sealed class Annotations
     public int SelectedIndex { get; private set; } = -1;
     public Annotation? Selected => SelectedIndex >= 0 ? items[SelectedIndex] : null;
     public bool Dragging => before != null;
-    public bool CanUndo => Dragging || history.Count > 0;
+    public bool EditingText => textBefore != null;
+    public bool CanUndo => Dragging || EditingText || history.Count > 0;
+    public TextAnnotationStyle TextStyle { get; private set; } = new();
     public uint Rgb { get; private set; } = 0xFF4545;
     public int Thickness { get; private set; } = 8;
     public int MosaicSize { get; private set; } = 30;
     public int NextNumber => checked(items.Where(m => m.Kind == AnnotationKind.Number).Select(m => m.Number).DefaultIfEmpty(0).Max() + 1);
 
-    public void Deselect() { if (!Dragging) SelectedIndex = -1; }
+    public void Deselect() { if (!Dragging && !EditingText) SelectedIndex = -1; }
 
     public static IEnumerable<(PixelPoint Point, SelectionHit Hit)> Handles(Annotation mark) =>
-        mark.Kind == AnnotationKind.Number ? new[] {
+        mark.Kind is AnnotationKind.Number or AnnotationKind.Text ? new[] {
             (new PixelPoint(mark.Rectangle.Left, mark.Rectangle.Top), SelectionHit.Move),
             (new PixelPoint(mark.Rectangle.Right, mark.Rectangle.Top), SelectionHit.Move),
             (new PixelPoint(mark.Rectangle.Left, mark.Rectangle.Bottom), SelectionHit.Move),
@@ -79,7 +84,7 @@ public sealed class Annotations
         {
             var r = items[i].Rectangle;
             int hitWidth = Math.Max(tolerance, items[i].Thickness);
-            if (items[i].Kind == AnnotationKind.Mosaic)
+            if (items[i].Kind is AnnotationKind.Mosaic or AnnotationKind.Text)
             {
                 if (r.Contains(p)) return (i, SelectionHit.Move);
                 continue;
@@ -127,7 +132,8 @@ public sealed class Annotations
 
     public void Begin(PixelPoint p, PixelRect region, int tolerance, AnnotationKind kind = AnnotationKind.Rectangle)
     {
-        if (Dragging || region.IsEmpty || !region.Contains(p)) return;
+        if (Dragging || EditingText || region.IsEmpty || !region.Contains(p)) return;
+        if (kind == AnnotationKind.Text && HitTest(p, tolerance).Index < 0) return;
         before = items.ToArray(); anchor = p; bounds = region;
         (SelectedIndex, operation) = HitTest(p, tolerance);
         if (SelectedIndex < 0)
@@ -137,6 +143,7 @@ public sealed class Annotations
         }
         originalMark = items[SelectedIndex];
         original = items[SelectedIndex].Rectangle;
+        if (originalMark.Kind == AnnotationKind.Text) TextStyle = originalMark.TextStyle;
         if (items[SelectedIndex].Kind == AnnotationKind.Mosaic) MosaicSize = items[SelectedIndex].Thickness;
         else { Rgb = items[SelectedIndex].Rgb; Thickness = items[SelectedIndex].Thickness; }
     }
@@ -145,6 +152,14 @@ public sealed class Annotations
     {
         if (!Dragging) return;
         p = bounds.Clamp(p);
+        if (originalMark.Kind == AnnotationKind.Text)
+        {
+            var delta = MoveDelta(p);
+            items[SelectedIndex] = originalMark with {
+                Start = new(originalMark.Start.X + delta.X, originalMark.Start.Y + delta.Y),
+                End = new(originalMark.End.X + delta.X, originalMark.End.Y + delta.Y) };
+            return;
+        }
         if (originalMark.Kind == AnnotationKind.Number)
         {
             var delta = MoveDelta(p);
@@ -238,19 +253,65 @@ public sealed class Annotations
         if (Dragging) return;
         if (mosaic) MosaicSize = thickness;
         else { Rgb = rgb; Thickness = thickness; }
-        if (Selected is not { } selected || (selected.Rgb == rgb && selected.Thickness == thickness)) return;
-        history.Push(items.ToArray()); items[SelectedIndex] = selected with { Rgb = rgb, Thickness = thickness };
+        if (Selected is not { } selected || (selected.Rgb == rgb && (selected.Kind == AnnotationKind.Text || selected.Thickness == thickness))) return;
+        if (!EditingText) history.Push(items.ToArray());
+        items[SelectedIndex] = selected.Kind == AnnotationKind.Text ? selected with { Rgb = rgb } : selected with { Rgb = rgb, Thickness = thickness };
+    }
+
+    public void BeginText(PixelPoint point, int index = -1)
+    {
+        if (Dragging || EditingText) return;
+        if (index < -1 || index >= items.Count || (index >= 0 && items[index].Kind != AnnotationKind.Text))
+            throw new ArgumentOutOfRangeException(nameof(index));
+        textBefore = items.ToArray();
+        if (index < 0)
+        {
+            index = items.Count;
+            items.Add(new(AnnotationKind.Text, point, point, Rgb, Thickness) { TextStyle = TextStyle });
+        }
+        SelectedIndex = index; TextStyle = items[index].TextStyle; Rgb = items[index].Rgb;
+    }
+
+    public void UpdateText(string text, PixelPoint size)
+    {
+        if (!EditingText) return;
+        if (text.Length > 4096 || size.X < 0 || size.Y < 0 || size.X > 2_000_000 || size.Y > 2_000_000)
+            throw new ArgumentOutOfRangeException(nameof(text));
+        var selected = Selected!;
+        items[SelectedIndex] = selected with { Text = text, TextStyle = TextStyle, Rgb = Rgb,
+            End = new(selected.Start.X + size.X, selected.Start.Y + size.Y) };
+    }
+
+    public void SetTextStyle(TextAnnotationStyle style, PixelPoint size)
+    {
+        style.Validate();
+        if (Dragging) return;
+        if (size.X < 0 || size.Y < 0 || size.X > 2_000_000 || size.Y > 2_000_000) throw new ArgumentOutOfRangeException(nameof(size));
+        TextStyle = style;
+        if (Selected is not { Kind: AnnotationKind.Text } selected || selected.TextStyle == style) return;
+        if (!EditingText) history.Push(items.ToArray());
+        items[SelectedIndex] = selected with { TextStyle = style, End = new(selected.Start.X + size.X, selected.Start.Y + size.Y) };
+    }
+
+    public void EndText(bool cancel = false)
+    {
+        if (textBefore == null) return;
+        var saved = textBefore; textBefore = null;
+        if (cancel) { Restore(saved); return; }
+        if (string.IsNullOrWhiteSpace(Selected!.Text)) { items.RemoveAt(SelectedIndex); SelectedIndex = -1; }
+        if (!items.SequenceEqual(saved)) history.Push(saved);
     }
 
     public void Delete()
     {
-        if (Dragging || SelectedIndex < 0) return;
+        if (Dragging || EditingText || SelectedIndex < 0) return;
         history.Push(items.ToArray()); items.RemoveAt(SelectedIndex); SelectedIndex = -1;
     }
 
     public void Undo()
     {
-        if (before != null) { var saved = before; before = null; Restore(saved); }
+        if (EditingText) EndText(true);
+        else if (before != null) { var saved = before; before = null; Restore(saved); }
         else if (history.TryPop(out var saved)) Restore(saved);
     }
 

@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
@@ -12,7 +13,7 @@ using SnapTool.Core;
 
 namespace SnapTool;
 
-internal sealed class OverlayWindow : Window
+internal sealed partial class OverlayWindow : Window
 {
     internal PixelRect Screen { get; }
     private readonly CaptureSession session;
@@ -20,23 +21,24 @@ internal sealed class OverlayWindow : Window
     private readonly Canvas canvas;
     private readonly Border toolbar;
     private readonly List<Button> outputButtons = [];
-    private Button rectangleButton = null!, arrowButton = null!, numberButton = null!, mosaicButton = null!, undoButton = null!;
+    private Button rectangleButton = null!, arrowButton = null!, textButton = null!, numberButton = null!, mosaicButton = null!, undoButton = null!;
     private TextBlock colorLabel = null!;
     private TextBlock thicknessLabel = null!;
     private readonly ComboBox colorBox = new() { Width = 82, Margin = new Thickness(4), VerticalContentAlignment = VerticalAlignment.Center };
     private readonly ComboBox thicknessBox = new() { Width = 70, Margin = new Thickness(4), VerticalContentAlignment = VerticalAlignment.Center };
-    private StackPanel stylePanel = null!;
+    private WrapPanel stylePanel = null!;
     private bool updatingStyle;
     private bool mosaicWidths;
     private static readonly Brush ToolBackground = CreateToolBackground();
+    private static readonly Brush ActiveToolBackground = new SolidColorBrush(Color.FromRgb(215, 240, 233));
 
     private static Brush CreateToolBackground()
     {
-        var brush = new SolidColorBrush(Color.FromRgb(40, 50, 70));
+        var brush = new SolidColorBrush(Color.FromRgb(255, 255, 255));
         brush.Freeze(); return brush;
     }
     private static readonly (string Name, uint Rgb)[] Colors = [("红色", 0xFF4545), ("黄色", 0xFFD447), ("绿色", 0x38D996), ("蓝色", 0x409CFF), ("白色", 0xFFFFFF), ("黑色", 0x000000)];
-    private readonly TextBlock status = new() { Foreground = Brushes.White, FontSize = 12,
+    private readonly TextBlock status = new() { Foreground = Brushes.DimGray, FontSize = 12,
         MaxWidth = 480, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(10, 4, 10, 6), Visibility = Visibility.Collapsed };
 
     internal OverlayWindow(CaptureSession session, PixelRect screen)
@@ -59,6 +61,12 @@ internal sealed class OverlayWindow : Window
         Loaded += (_, _) => PositionOnMonitor();
         SizeChanged += (_, _) => { surface.InvalidateVisual(); if (toolbar.Visibility == Visibility.Visible) PlaceToolbar(); };
         PreviewKeyDown += OnKey;
+        PreviewMouseDown += (_, e) =>
+        {
+            if (session.TextEditor != null && e.OriginalSource is DependencyObject source &&
+                !Inside(textEditor, source) && !Inside(textControls, source) && !Inside(colorBox, source))
+                session.FinishTextEditing();
+        };
         Closed += (_, _) => session.WindowClosed(this);
     }
 
@@ -72,10 +80,10 @@ internal sealed class OverlayWindow : Window
     private Border CreateToolbar()
     {
         var panel = new StackPanel { Orientation = Orientation.Horizontal };
-        outputButtons.Add(AddButton(panel, "复制", "复制图片，Ctrl+C 或 Enter", async () => await session.Copy(this), true));
-        outputButtons.Add(AddButton(panel, "贴图", "当前选区置顶贴图，Ctrl+T 或 F3", session.Pin));
+        outputButtons.Add(AddButton(panel, "复制", "复制图片，Ctrl+C", async () => await session.Copy(this), true));
+        outputButtons.Add(AddButton(panel, "贴图", "当前选区置顶贴图，Ctrl+T", session.Pin));
         outputButtons.Add(AddButton(panel, "长截图", "手动向下滚动并拼接截图", session.StartScroll));
-        outputButtons.Add(AddButton(panel, "录屏", "录制选区为 GIF 动图；完成或 Ctrl+F2 复制，取消放弃", session.StartRecording));
+        outputButtons.Add(AddButton(panel, "录屏", "录制选区为 GIF 动图；录屏窗口内 Ctrl+C 完成并复制，取消放弃", session.StartRecording));
         outputButtons.Add(AddButton(panel, "OCR", "识别文字，Shift+C", async () => await session.RecognizeText()));
         outputButtons.Add(AddButton(panel, "翻译", "有道文本翻译，Shift+T", async () => await session.RecognizeText(true)));
         outputButtons.Add(AddButton(panel, "保存", "保存 PNG，Ctrl+S", () => session.Save(this)));
@@ -83,29 +91,36 @@ internal sealed class OverlayWindow : Window
         var tools = new StackPanel { Orientation = Orientation.Horizontal };
         rectangleButton = AddButton(tools, "矩形", "绘制矩形；Shift 正方形；再次点击退出绘制", () => session.ToggleTool(AnnotationKind.Rectangle));
         arrowButton = AddButton(tools, "箭头", "绘制箭头；Shift 限制方向；再次点击退出绘制", () => session.ToggleTool(AnnotationKind.Arrow));
+        textButton = AddButton(tools, "文字", "点击输入文字，双击已有文字编辑；拖动文字移动；再次点击退出", () => session.ToggleTool(AnnotationKind.Text));
         numberButton = AddButton(tools, "序号", "点击添加自增数字，从 1 开始；拖动已有序号移动；再次点击退出", () => session.ToggleTool(AnnotationKind.Number));
         mosaicButton = AddButton(tools, "马赛克", "拖动框选马赛克；拖动区域移动；控制点缩放；再次点击退出", () => session.ToggleTool(AnnotationKind.Mosaic));
         undoButton = AddButton(tools, "撤销", "撤销标注，Ctrl+Z", session.UndoAnnotation);
-        outputButtons.AddRange([rectangleButton, arrowButton, numberButton, mosaicButton, undoButton]);
-        stylePanel = new StackPanel { Orientation = Orientation.Horizontal, Visibility = Visibility.Collapsed };
-        colorLabel = new TextBlock { Text = "颜色", Foreground = Brushes.White, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 2, 0) };
+        outputButtons.AddRange([rectangleButton, arrowButton, textButton, numberButton, mosaicButton, undoButton]);
+        stylePanel = new WrapPanel { Visibility = Visibility.Collapsed };
+        colorLabel = new TextBlock { Text = "颜色", Foreground = Brushes.DimGray, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 2, 0) };
         stylePanel.Children.Add(colorLabel);
         foreach (var color in Colors) colorBox.Items.Add(new ComboBoxItem { Content = color.Name, Tag = color.Rgb });
         colorBox.SelectedIndex = 0; stylePanel.Children.Add(colorBox);
-        thicknessLabel = new TextBlock { Text = "粗细", Foreground = Brushes.White, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 2, 0) };
+        thicknessLabel = new TextBlock { Text = "粗细", Foreground = Brushes.DimGray, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 2, 0) };
         stylePanel.Children.Add(thicknessLabel);
         foreach (int width in new[] { 2, 3, 5, 8 }) thicknessBox.Items.Add(new ComboBoxItem { Content = width + " px", Tag = width });
         foreach (ComboBoxItem item in thicknessBox.Items) if ((int)item.Tag == session.Annotations.Thickness) thicknessBox.SelectedItem = item;
         stylePanel.Children.Add(thicknessBox);
         colorBox.SelectionChanged += (_, _) => ChangeStyle();
         thicknessBox.SelectionChanged += (_, _) => ChangeStyle();
-        var content = new StackPanel(); content.Children.Add(panel); content.Children.Add(tools); content.Children.Add(stylePanel); content.Children.Add(status);
+        textControls = new TextAnnotationControls(session.SetTextStyle);
+        stylePanel.Children.Add(textControls);
+        var row = new WrapPanel { VerticalAlignment = VerticalAlignment.Center };
+        row.Children.Add(tools);
+        row.Children.Add(new Border { Width = 1, Height = 26, Background = Brushes.Gainsboro, Margin = new Thickness(8, 5, 8, 5) });
+        row.Children.Add(panel);
+        var content = new StackPanel(); content.Children.Add(row); content.Children.Add(stylePanel); content.Children.Add(status);
         return new Border
         {
-            Background = new SolidColorBrush(Color.FromRgb(23, 30, 46)), CornerRadius = new CornerRadius(9),
-            BorderBrush = new SolidColorBrush(Color.FromRgb(68, 81, 103)), BorderThickness = new Thickness(1),
-            Padding = new Thickness(5), Child = content, Visibility = Visibility.Collapsed,
-            Effect = new System.Windows.Media.Effects.DropShadowEffect { BlurRadius = 16, ShadowDepth = 3, Opacity = 0.3 }
+            Background = Brushes.White, CornerRadius = new CornerRadius(12),
+            BorderBrush = Brushes.Gainsboro, BorderThickness = new Thickness(1),
+            Padding = new Thickness(7), Child = content, Visibility = Visibility.Collapsed,
+            Effect = new System.Windows.Media.Effects.DropShadowEffect { BlurRadius = 16, ShadowDepth = 3, Opacity = 0.18 }
         };
     }
 
@@ -119,25 +134,34 @@ internal sealed class OverlayWindow : Window
     {
         var button = new Button
         {
-            Content = label, ToolTip = tooltip, FontSize = 13, FontFamily = new FontFamily("Microsoft YaHei UI"),
-            Padding = new Thickness(15, 8, 15, 8), Margin = new Thickness(2), BorderThickness = new Thickness(0),
-            Background = primary ? new SolidColorBrush(Color.FromRgb(92, 228, 197)) : ToolBackground,
-            Foreground = primary ? new SolidColorBrush(Color.FromRgb(13, 40, 36)) : Brushes.White,
+            Tag = label, ToolTip = tooltip,
+            Width = 38, Height = 38, Padding = new Thickness(7), Margin = new Thickness(2), BorderThickness = new Thickness(0),
+            Background = primary ? new SolidColorBrush(Color.FromRgb(229, 247, 241)) : ToolBackground,
+            Foreground = new SolidColorBrush(Color.FromRgb(32, 35, 40)),
             Cursor = Cursors.Hand
         };
-        System.Windows.Automation.AutomationProperties.SetName(button, tooltip);
+        var icon = new ToolbarIcon(label);
+        icon.SetBinding(ToolbarIcon.StrokeProperty, new Binding(nameof(Button.Foreground)) { Source = button });
+        button.Content = icon;
+        System.Windows.Automation.AutomationProperties.SetName(button, label);
+        System.Windows.Automation.AutomationProperties.SetHelpText(button, tooltip);
+        ToolTipService.SetInitialShowDelay(button, 300);
         var border = new FrameworkElementFactory(typeof(Border));
+        border.Name = "IconButtonChrome";
         border.SetValue(Border.CornerRadiusProperty, new CornerRadius(5));
         border.SetValue(Border.BackgroundProperty, new TemplateBindingExtension(Control.BackgroundProperty));
         border.SetValue(Border.PaddingProperty, new TemplateBindingExtension(Control.PaddingProperty));
         var content = new FrameworkElementFactory(typeof(ContentPresenter));
         content.SetValue(ContentPresenter.HorizontalAlignmentProperty, HorizontalAlignment.Center);
+        content.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
         border.AppendChild(content);
         var template = new ControlTemplate(typeof(Button)) { VisualTree = border };
         var hover = new Trigger { Property = Button.IsMouseOverProperty, Value = true };
-        hover.Setters.Add(new Setter(UIElement.OpacityProperty, 0.8)); template.Triggers.Add(hover);
+        hover.Setters.Add(new Setter(Border.BackgroundProperty, Brushes.Gainsboro, "IconButtonChrome")); template.Triggers.Add(hover);
         var pressed = new Trigger { Property = Button.IsPressedProperty, Value = true };
-        pressed.Setters.Add(new Setter(UIElement.OpacityProperty, 0.6)); template.Triggers.Add(pressed);
+        pressed.Setters.Add(new Setter(UIElement.OpacityProperty, 0.6, "IconButtonChrome")); template.Triggers.Add(pressed);
+        var disabled = new Trigger { Property = IsEnabledProperty, Value = false };
+        disabled.Setters.Add(new Setter(UIElement.OpacityProperty, 0.3, "IconButtonChrome")); template.Triggers.Add(disabled);
         button.Template = template;
         button.Click += (_, _) => action(); panel.Children.Add(button);
         return button;
@@ -147,6 +171,8 @@ internal sealed class OverlayWindow : Window
     internal void ShowToolbar() { toolbar.Visibility = Visibility.Visible; Refresh(); }
     private void PlaceToolbar()
     {
+        toolbar.MaxWidth = Math.Max(100, (ActualWidth > 0 ? ActualWidth : Width) - 20);
+        textControls.MaxWidth = Math.Max(80, toolbar.MaxWidth - 20);
         toolbar.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
         var r = session.Selection.Rectangle.Intersect(Screen);
         double sx = ActualWidth / Screen.Width, sy = ActualHeight / Screen.Height;
@@ -165,15 +191,20 @@ internal sealed class OverlayWindow : Window
         surface.InvalidateVisual();
         foreach (var button in outputButtons) { button.IsEnabled = !session.Busy; button.Opacity = session.Busy ? 0.5 : 1; }
         undoButton.IsEnabled = !session.Busy && session.Annotations.CanUndo;
-        rectangleButton.Background = session.Tool == AnnotationKind.Rectangle ? Brushes.Teal : ToolBackground;
-        arrowButton.Background = session.Tool == AnnotationKind.Arrow ? Brushes.Teal : ToolBackground;
-        numberButton.Background = session.Tool == AnnotationKind.Number ? Brushes.Teal : ToolBackground;
-        mosaicButton.Background = session.Tool == AnnotationKind.Mosaic ? Brushes.Teal : ToolBackground;
+        rectangleButton.Background = session.Tool == AnnotationKind.Rectangle ? ActiveToolBackground : ToolBackground;
+        arrowButton.Background = session.Tool == AnnotationKind.Arrow ? ActiveToolBackground : ToolBackground;
+        numberButton.Background = session.Tool == AnnotationKind.Number ? ActiveToolBackground : ToolBackground;
+        mosaicButton.Background = session.Tool == AnnotationKind.Mosaic ? ActiveToolBackground : ToolBackground;
+        textButton.Background = session.Tool == AnnotationKind.Text ? ActiveToolBackground : ToolBackground;
         stylePanel.Visibility = session.Annotating ? Visibility.Visible : Visibility.Collapsed;
         colorBox.IsEnabled = thicknessBox.IsEnabled = !session.Busy;
         updatingStyle = true;
         var styleKind = session.Annotations.Selected?.Kind ?? session.Tool;
-        bool numberStyle = styleKind == AnnotationKind.Number, mosaicStyle = styleKind == AnnotationKind.Mosaic;
+        bool numberStyle = styleKind == AnnotationKind.Number, mosaicStyle = styleKind == AnnotationKind.Mosaic, textStyle = styleKind == AnnotationKind.Text;
+        textControls.Visibility = textStyle ? Visibility.Visible : Visibility.Collapsed;
+        textControls.IsEnabled = !session.Busy;
+        textControls.Sync(session.Annotations.TextStyle);
+        thicknessLabel.Visibility = thicknessBox.Visibility = textStyle ? Visibility.Collapsed : Visibility.Visible;
         colorLabel.Visibility = colorBox.Visibility = mosaicStyle ? Visibility.Collapsed : Visibility.Visible;
         thicknessLabel.Text = numberStyle ? "直径" : mosaicStyle ? "粒度" : "粗细";
         if (mosaicWidths != mosaicStyle)
@@ -187,14 +218,8 @@ internal sealed class OverlayWindow : Window
         int styleWidth = mosaicStyle ? session.Annotations.MosaicSize : session.Annotations.Thickness;
         foreach (ComboBoxItem item in thicknessBox.Items) if ((int)item.Tag == styleWidth) thicknessBox.SelectedItem = item;
         updatingStyle = false;
-        status.Text = !string.IsNullOrEmpty(session.Status) ? session.Status : session.Tool switch
-        {
-            AnnotationKind.Rectangle => "拖动画框 · 拖动框线移动 · 拖动控制点缩放",
-            AnnotationKind.Arrow => "拖动绘制 · 拖动线身移动 · 拖动端点调整 · Shift 限制方向",
-            AnnotationKind.Number => $"点击添加 {session.Annotations.NextNumber} · 拖动序号移动 · Delete 删除 · Ctrl+Z 撤销",
-            AnnotationKind.Mosaic => "拖动框选马赛克 · 拖动区域移动 · 控制点缩放 · Delete 删除 · Ctrl+Z 撤销",
-            _ => "拖动框内移动 · 拖动截图边缘或角点调整大小"
-        };
+        RefreshTextEditor();
+        status.Text = session.Status;
         status.Visibility = string.IsNullOrEmpty(status.Text) ? Visibility.Collapsed : Visibility.Visible;
         if (toolbar.Visibility == Visibility.Visible) PlaceToolbar();
     }
@@ -202,14 +227,19 @@ internal sealed class OverlayWindow : Window
 
     internal async Task HandleKey(KeyEventArgs e, ModifierKeys modifiers)
     {
+        if (textEditor != null && (textEditor.IsKeyboardFocusWithin || Inside(textEditor, e.OriginalSource as DependencyObject)))
+        {
+            if (e.Key == Key.Escape) { e.Handled = true; session.FinishTextEditing(true); surface.Focus(); }
+            else if (e.Key == Key.Enter && modifiers == ModifierKeys.Control) { e.Handled = true; session.FinishTextEditing(); surface.Focus(); }
+            return;
+        }
+        if (Keyboard.FocusedElement is System.Windows.Controls.Primitives.TextBoxBase || e.OriginalSource is System.Windows.Controls.Primitives.TextBoxBase) return;
         if (e.Key == Key.Escape && (!session.Busy || session.Recognizing))
         { e.Handled = true; session.Close(); return; }
         if (session.Busy) { e.Handled = true; return; }
         if (e.Key == Key.C && modifiers == ModifierKeys.Control)
         { e.Handled = true; await session.Copy(this); }
         else if (e.Key == Key.T && modifiers == ModifierKeys.Control)
-        { e.Handled = true; session.Pin(); }
-        else if (e.Key == Key.F3 && modifiers == ModifierKeys.None)
         { e.Handled = true; session.Pin(); }
         else if (e.Key == Key.Z && modifiers == ModifierKeys.Control)
         { e.Handled = true; session.UndoAnnotation(); }
@@ -219,10 +249,6 @@ internal sealed class OverlayWindow : Window
         { e.Handled = true; await session.RecognizeText(); }
         else if (e.Key == Key.T && modifiers == ModifierKeys.Shift)
         { e.Handled = true; await session.RecognizeText(true); }
-        else if (e.Key == Key.Enter && modifiers == ModifierKeys.None &&
-            !toolbar.IsKeyboardFocusWithin && !colorBox.IsDropDownOpen && !thicknessBox.IsDropDownOpen &&
-            (e.OriginalSource == null || e.OriginalSource == this || e.OriginalSource == surface))
-        { e.Handled = true; await session.Copy(this); }
         else if (e.Key == Key.S && modifiers == ModifierKeys.Control)
         { e.Handled = true; session.Save(this); }
     }
@@ -251,7 +277,9 @@ internal sealed class SelectionSurface : FrameworkElement
     private async void Down(object sender, MouseButtonEventArgs e)
     {
         if (session.Busy) return;
+        session.FinishTextEditing();
         var p = Native.CursorPosition();
+        if (session.TryEditText(window, p, Tolerance, e.ClickCount == 2)) { e.Handled = true; return; }
         if (!session.Annotating && e.ClickCount == 2 && session.HitTest(p, Tolerance) == (true, SelectionHit.Move))
         { e.Handled = true; await session.Copy(window); return; }
         Focus(); session.Begin(p, Tolerance); if (session.Dragging) CaptureMouse(); e.Handled = true;
@@ -270,7 +298,7 @@ internal sealed class SelectionSurface : FrameworkElement
             SelectionHit.Top or SelectionHit.Bottom => Cursors.SizeNS,
             (SelectionHit.Left | SelectionHit.Top) or (SelectionHit.Right | SelectionHit.Bottom) => Cursors.SizeNWSE,
             (SelectionHit.Right | SelectionHit.Top) or (SelectionHit.Left | SelectionHit.Bottom) => Cursors.SizeNESW,
-            _ => Cursors.Cross
+            _ => session.Tool == AnnotationKind.Text && !target.Selection ? Cursors.IBeam : Cursors.Cross
         };
     }
     private void Up(object sender, MouseButtonEventArgs e)
@@ -295,9 +323,10 @@ internal sealed class SelectionSurface : FrameworkElement
             dc.DrawGeometry(Shade, null, shade);
             dc.PushClip(new RectangleGeometry(r));
             dc.PushTransform(new MatrixTransform(sx, 0, 0, sy, -screen.Left * sx, -screen.Top * sy));
-            AnnotationRenderer.Draw(dc, session.Annotations.Items, session.Mosaic);
+            var marks = session.Annotations.Items;
+            AnnotationRenderer.Draw(dc, session.Annotations.EditingText ? System.Linq.Enumerable.Where(marks, mark => !ReferenceEquals(mark, session.Annotations.Selected)) : marks, session.Mosaic);
             dc.Pop();
-            if (session.Annotating && session.Annotations.Selected is { } mark && !session.Dragging)
+            if (session.Annotating && session.Annotations.Selected is { } mark && !session.Dragging && !session.Annotations.EditingText)
                 foreach (var handle in Annotations.Handles(mark))
                 {
                     double hx = (handle.Point.X - screen.Left) * sx, hy = (handle.Point.Y - screen.Top) * sy;

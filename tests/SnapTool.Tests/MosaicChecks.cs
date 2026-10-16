@@ -144,10 +144,10 @@ internal static class MosaicChecks
             try
             {
                 var panel = (StackPanel)((Border)((Canvas)((Grid)window.Content).Children[1]).Children[0]).Child;
-                var button = ((StackPanel)panel.Children[1]).Children.OfType<Button>().Single(b => b.Content?.ToString() == "马赛克");
+                var button = RefreshChecks.Descendants<Button>(panel).Single(b => b.Tag?.ToString() == "马赛克");
                 button.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent)); Assert(session.Tool == AnnotationKind.Mosaic);
                 window.Refresh();
-                var style = (StackPanel)panel.Children[2]; Assert(((TextBlock)style.Children[2]).Text == "粒度");
+                var style = (Panel)panel.Children[1]; Assert(((TextBlock)style.Children[2]).Text == "粒度");
                 Assert(style.Children[0].Visibility == Visibility.Collapsed && style.Children[1].Visibility == Visibility.Collapsed);
                 Assert(((ComboBoxItem)((ComboBox)style.Children[3]).SelectedItem).Content.ToString() == "30 px");
                 Assert(((ComboBox)style.Children[3]).Items.Cast<ComboBoxItem>().Select(i => (int)i.Tag).SequenceEqual(new[] { 8, 16, 24, 30 }));

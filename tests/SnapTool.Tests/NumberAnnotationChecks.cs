@@ -70,7 +70,7 @@ internal static class NumberAnnotationChecks
             session.Selection.Select(Bounds); var window = new OverlayWindow(session, Bounds);
             try
             {
-                var button = RefreshChecks.Descendants<Button>((DependencyObject)window.Content).Single(b => Equals(b.Content, "序号"));
+                var button = RefreshChecks.Descendants<Button>((DependencyObject)window.Content).Single(b => Equals(b.Tag, "序号"));
                 button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); Assert(session.Tool == AnnotationKind.Number);
                 session.Begin(new(0, 80), 2); session.End(new(0, 80)); Assert(session.Annotations.Items.Single().Number == 1);
                 session.Begin(new(-100, 100), 2); session.End(new(-80, 100));

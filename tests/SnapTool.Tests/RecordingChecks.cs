@@ -7,6 +7,7 @@ using SnapTool.Core;
 using Windows.Graphics.Imaging;
 using System.Runtime.InteropServices.WindowsRuntime;
 using System.Linq;
+using System.Windows.Input;
 
 namespace SnapTool.Tests;
 
@@ -180,9 +181,14 @@ internal static class RecordingChecks
                     fixture.Background = System.Windows.Media.Brushes.Lime;
                     while (recorder.Frames < 15 && timeout.Elapsed < TimeSpan.FromSeconds(15)) await Task.Delay(50);
                     Assert(recorder.Frames >= 15);
-                    var stop = recorder.Stop(); await recorder.Stop(); await stop;
+                    foreach (var modifiers in new[] { ModifierKeys.None, ModifierKeys.Shift, ModifierKeys.Control | ModifierKeys.Shift })
+                        await ShortcutChecks.Press(recorder, Key.C, modifiers);
+                    await ShortcutChecks.Press(recorder, Key.F2, ModifierKeys.Control); Assert(copies == 0);
+                    var stop = ShortcutChecks.Press(recorder, Key.C, ModifierKeys.Control);
+                    await ShortcutChecks.Press(recorder, Key.C, ModifierKeys.Control); await stop;
                     Assert(path != null && File.Exists(path) && copies == 1 && notifications == 0 && recorder.IsVisible);
-                    var retry = recorder.Stop(); await recorder.Stop(); await retry;
+                    var retry = ShortcutChecks.Press(recorder, Key.C, ModifierKeys.Control);
+                    await ShortcutChecks.Press(recorder, Key.C, ModifierKeys.Control); await retry;
                     Assert(copies == 2 && notifications == 1 && !recorder.IsVisible && !app.Windows.OfType<RecordingBorder>().Any());
                     using var file = File.OpenRead(path!); using var input = file.AsRandomAccessStream();
                     var decoder = await BitmapDecoder.CreateAsync(input);
@@ -199,7 +205,7 @@ internal static class RecordingChecks
                 finally { recorder.Close(); }
                 var countdown = new RecordingWindow(new(120, 120, 440, 300), (_, _) => throw new Exception("Unexpected notification"),
                     _ => Task.FromResult(Solid()), (_, _) => throw new Exception("Unexpected copy"), DirectoryPath);
-                countdown.Start(); await countdown.Cancel(); Assert(!countdown.IsVisible);
+                countdown.Start(); await ShortcutChecks.Press(countdown, Key.C, ModifierKeys.Control); Assert(!countdown.IsVisible);
                 string? discardedPath = null; int acceptedCopies = 0;
                 var copying = new TaskCompletionSource();
                 var canceled = new RecordingWindow(new(120, 120, 440, 300), (_, _) => throw new Exception("Unexpected notification"),
@@ -209,8 +215,8 @@ internal static class RecordingChecks
                 var deadline = System.Diagnostics.Stopwatch.StartNew();
                 while (canceled.Frames < 3 && deadline.Elapsed < TimeSpan.FromSeconds(10)) await Task.Delay(50);
                 Assert(canceled.Frames >= 3);
-                var finishing = canceled.Stop(); await copying.Task.WaitAsync(TimeSpan.FromSeconds(5));
-                await canceled.Cancel(); await finishing;
+                var finishing = ShortcutChecks.Press(canceled, Key.C, ModifierKeys.Control); await copying.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                await ShortcutChecks.Press(canceled, Key.Escape, ModifierKeys.None); await finishing;
                 Assert(acceptedCopies == 0 && discardedPath != null && !File.Exists(discardedPath) && !canceled.IsVisible);
                 Assert(!app.Windows.OfType<RecordingBorder>().Any());
                 Console.WriteLine("PASS native recording controls: finish/copy, retry, repeated finish, countdown cancel, cancel pending copy, border cleanup.");

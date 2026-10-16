@@ -245,7 +245,7 @@ internal static class AnnotationChecks
             try
             {
                 var toolbar = Toolbar(window);
-                Button Find(string label) => Descendants(toolbar).OfType<Button>().Single(b => Equals(b.Content, label));
+                Button Find(string label) => Descendants(toolbar).OfType<Button>().Single(b => Equals(b.Tag, label));
                 Find("矩形").RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); Assert(s.Annotating);
                 s.Begin(new(0, 0), 2); s.End(new(100, 100));
                 var combos = Descendants(toolbar).OfType<ComboBox>().ToArray(); combos[0].SelectedIndex = 3;
@@ -253,8 +253,8 @@ internal static class AnnotationChecks
                 Assert((int)((ComboBoxItem)combos[1].SelectedItem).Tag == 8);
                 ShortcutChecks.Press(window, Key.Delete, ModifierKeys.None).GetAwaiter().GetResult(); Assert(s.Annotations.Items.Count == 0);
                 Find("撤销").RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); Assert(s.Annotations.Items.Count == 1);
-                Assert(!Descendants(toolbar).OfType<Button>().Any(b => Equals(b.Content, "调整选区")));
-                Assert(!Descendants(toolbar).OfType<Button>().Any(b => Equals(b.Content, "删除") || Equals(b.Content, "识别文字")));
+                Assert(!Descendants(toolbar).OfType<Button>().Any(b => Equals(b.Tag, "调整选区")));
+                Assert(!Descendants(toolbar).OfType<Button>().Any(b => Equals(b.Tag, "删除") || Equals(b.Tag, "识别文字")));
                 Assert(Equals(Find("OCR").ToolTip, "识别文字，Shift+C"));
                 Find("矩形").RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); Assert(!s.Annotating);
             }

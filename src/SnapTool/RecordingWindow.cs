@@ -50,11 +50,18 @@ internal sealed class RecordingWindow : Window
         cancelButton = new Button { Content = "取消", Padding = new Thickness(12, 5, 12, 5) };
         stopButton.Click += async (_, _) => await Stop(); cancelButton.Click += async (_, _) => await Cancel();
         actions.Children.Add(stopButton); actions.Children.Add(cancelButton); panel.Children.Add(actions); Content = panel;
-        PreviewKeyDown += async (_, e) => { if (e.Key == Key.Escape) { e.Handled = true; await Cancel(); } };
+        ToolTip = "本窗口内 Ctrl+C 完成并复制 GIF，Esc 取消。";
+        PreviewKeyDown += async (_, e) => await HandleKey(e, Keyboard.Modifiers);
         timer.Tick += (_, _) => { if (recording && !stopping) status.Text = $"● 录制中 {job.Elapsed:mm\\:ss} · {size.Width} × {size.Height} · GIF 动图"; };
         Closing += OnClosing;
         SourceInitialized += (_, _) => HwndSource.FromHwnd(new WindowInteropHelper(this).Handle)?.AddHook(OnWindowMessage);
         Closed += (_, _) => { timer.Stop(); border.Close(); cancellation.Dispose(); };
+    }
+
+    internal async Task HandleKey(KeyEventArgs e, ModifierKeys modifiers)
+    {
+        if (e.Key == Key.Escape) { e.Handled = true; await Cancel(); }
+        else if (e.Key == Key.C && modifiers == ModifierKeys.Control) { e.Handled = true; await Stop(); }
     }
 
     internal void Start()

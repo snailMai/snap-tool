@@ -26,7 +26,7 @@ internal static class RefreshChecks
             var window = new OverlayWindow(s, bounds);
             var windows = (List<OverlayWindow>)typeof(CaptureSession).GetField("windows", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(s)!;
             windows.Add(window);
-            var button = Descendants<Button>((DependencyObject)window.Content).Single(b => Equals(b.Content, "矩形"));
+            var button = Descendants<Button>((DependencyObject)window.Content).Single(b => Equals(b.Tag, "矩形"));
             var descriptor = DependencyPropertyDescriptor.FromProperty(Control.BackgroundProperty, typeof(Button));
             int changes = 0;
             EventHandler changed = (_, _) => changes++;

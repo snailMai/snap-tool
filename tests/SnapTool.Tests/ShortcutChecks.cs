@@ -27,10 +27,16 @@ internal static class ShortcutChecks
         s.Selection.Begin(new(20, 20), 0); s.Selection.End(new(300, 200));
         s.SetTool(AnnotationKind.Arrow); s.Begin(new(50, 50), 2); s.End(new(200, 150)); return s;
     }
-    private static KeyEventArgs KeyEvent(OverlayWindow window, Key key) =>
+    private static KeyEventArgs KeyEvent(Window window, Key key) =>
         new(Keyboard.PrimaryDevice, HwndSource.FromHwnd(new WindowInteropHelper(window).EnsureHandle()), Environment.TickCount, key)
             { RoutedEvent = Keyboard.PreviewKeyDownEvent };
-    internal static Task Press(OverlayWindow window, Key key, ModifierKeys modifiers) => window.HandleKey(KeyEvent(window, key), modifiers);
+    internal static Task Press(Window window, Key key, ModifierKeys modifiers) => window switch
+    {
+        OverlayWindow overlay => overlay.HandleKey(KeyEvent(window, key), modifiers),
+        ScrollCaptureWindow scroll => scroll.HandleKey(KeyEvent(window, key), modifiers),
+        RecordingWindow recording => recording.HandleKey(KeyEvent(window, key), modifiers),
+        _ => throw new ArgumentException("Unsupported shortcut window", nameof(window))
+    };
     private static byte[] Pixels(BitmapSource image)
     {
         var converted = new FormatConvertedBitmap(image, PixelFormats.Pbgra32, null, 0);
@@ -77,10 +83,10 @@ internal static class ShortcutChecks
             }
             catch (ExternalException) { Assert(attempts == 4); }
         }));
-        test("Enter respects toolbar controls descendants and modifiers", () => OcrChecks.Pump(async () =>
+        test("removed Enter and F3 shortcuts never copy or pin", () => OcrChecks.Pump(async () =>
         {
-            int copies = 0;
-            var s = Session(_ => { copies++; return Task.CompletedTask; });
+            int copies = 0, pins = 0;
+            var s = Session(_ => { copies++; return Task.CompletedTask; }, (_, _) => pins++);
             var window = new OverlayWindow(s, Bounds);
             try
             {
@@ -103,13 +109,16 @@ internal static class ShortcutChecks
                 }
                 var surface = RefreshChecks.Descendants<SelectionSurface>((DependencyObject)window.Content).Single();
                 var enter = KeyEvent(window, Key.Enter); enter.Source = surface;
-                await window.HandleKey(enter, ModifierKeys.None); Assert(enter.Handled && copies == 1);
+                await window.HandleKey(enter, ModifierKeys.None); Assert(!enter.Handled && copies == 0);
+                foreach (var modifiers in new[] { ModifierKeys.None, ModifierKeys.Control, ModifierKeys.Shift, ModifierKeys.Alt })
+                    await Press(window, Key.F3, modifiers);
+                Assert(copies == 0 && pins == 0);
             }
             finally { window.Close(); s.Close(); }
         }));
-        test("Ctrl+C and Enter copy annotated selection and close once", () => OcrChecks.Pump(async () =>
+        test("Ctrl+C copies annotated selection and closes once", () => OcrChecks.Pump(async () =>
         {
-            foreach (var (key, modifiers) in new[] { (Key.C, ModifierKeys.Control), (Key.Enter, ModifierKeys.None) })
+            foreach (var (key, modifiers) in new[] { (Key.C, ModifierKeys.Control) })
             {
                 int copies = 0, closed = 0; BitmapSource? copied = null;
                 var s = Session(image => { copies++; copied = image; return Task.CompletedTask; }, finished: () => closed++);
@@ -123,9 +132,9 @@ internal static class ShortcutChecks
                 finally { window.Close(); }
             }
         }));
-        test("Ctrl+T and F3 pin annotated selection without copying or disabling tool", () => OcrChecks.Pump(async () =>
+        test("Ctrl+T pins annotated selection without copying or disabling tool", () => OcrChecks.Pump(async () =>
         {
-            foreach (var (key, modifiers) in new[] { (Key.T, ModifierKeys.Control), (Key.F3, ModifierKeys.None) })
+            foreach (var (key, modifiers) in new[] { (Key.T, ModifierKeys.Control) })
             {
                 int copies = 0, pins = 0, closed = 0; BitmapSource? pinned = null;
                 var s = Session(_ => { copies++; return Task.CompletedTask; }, (image, rect) =>

@@ -15,6 +15,7 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        if (args.Contains("--translation-window-checks")) { Test("native translation auto close", TranslationWindowChecks.Run); return failed == 0 ? 0 : 1; }
         if (args.Contains("--mosaic-checks")) { MosaicChecks.Run(Test); return failed == 0 ? 0 : 1; }
         if (args.Contains("--mosaic-preview")) { MosaicChecks.RenderPreview(); return 0; }
         if (args.Contains("--recording-encoder-checks")) { Test("recording encoder", RecordingChecks.CheckEncoder); return failed == 0 ? 0 : 1; }
@@ -22,6 +23,9 @@ internal static class Program
         if (args.Contains("--recording-preview")) { RecordingChecks.RenderPreview(); return 0; }
         if (args.Contains("--recording-window-checks")) { Test("recording capture", RecordingChecks.CheckCapture); return failed == 0 ? 0 : 1; }
         if (args.Contains("--number-preview")) { NumberAnnotationChecks.RenderPreview(); return 0; }
+        if (args.Contains("--text-preview")) { TextAnnotationChecks.RenderPreview(); return 0; }
+        if (args.Contains("--text-checks")) { TextAnnotationChecks.Run(Test); return failed == 0 ? 0 : 1; }
+        if (args.Contains("--text-window-checks")) { Test("native text editor", TextAnnotationChecks.CheckWindow); return failed == 0 ? 0 : 1; }
         if (args.Contains("--scroll-checks")) { ScrollChecks.Run(Test); return failed == 0 ? 0 : 1; }
         if (args.Contains("--scroll-window-checks")) { Test("native scroll capture", ScrollChecks.CheckNativeWindows); return failed == 0 ? 0 : 1; }
         if (args.Contains("--scroll-preview")) { ScrollChecks.RenderPreview(); return 0; }
@@ -141,6 +145,7 @@ internal static class Program
         AnnotationChecks.Run(Test);
         ArrowAnnotationChecks.Run(Test);
         NumberAnnotationChecks.Run(Test);
+        TextAnnotationChecks.Run(Test);
         MosaicChecks.Run(Test);
         RecordingChecks.Run(Test);
         PinChecks.Run(Test);
