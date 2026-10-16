@@ -15,9 +15,10 @@ internal sealed class CaptureSession(DesktopSnapshot snapshot, Action finished, 
     Func<string, CancellationToken, Task>? copyText = null, Action<string>? showTranslation = null,
     Action<BitmapSource, PixelRect>? showPin = null, Func<BitmapSource, CancellationToken, Task>? copyImage = null,
     IReadOnlyList<PixelRect>? windowTargets = null, Action<PixelRect, BitmapSource>? showScroll = null,
-    Func<PixelRect, bool>? showRecording = null)
+    Func<PixelRect, bool>? showRecording = null, Func<ShortcutProfile>? getShortcuts = null)
 {
     internal DesktopSnapshot Snapshot { get; } = snapshot;
+    internal ShortcutProfile Shortcuts => getShortcuts?.Invoke() ?? ShortcutProfile.Default;
     internal SelectionModel Selection { get; } = new(snapshot.Bounds);
     internal Annotations Annotations { get; } = new();
     internal MosaicRenderer Mosaic { get; } = new(snapshot);
@@ -328,7 +329,7 @@ internal sealed class CaptureSession(DesktopSnapshot snapshot, Action finished, 
     {
         FinishTextEditing();
         if (Busy || Dragging || Selection.Rectangle.IsEmpty || closed) return;
-        Busy = true; Recognizing = true; Status = "正在识别文字… Esc 取消";
+        Busy = true; Recognizing = true; Status = $"正在识别文字… {Shortcuts[ShortcutAction.Cancel]} 取消";
         using var cancellation = new CancellationTokenSource();
         outputCancellation = cancellation;
         Refresh();

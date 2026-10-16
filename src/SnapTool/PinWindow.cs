@@ -29,15 +29,18 @@ internal sealed class PinWindow : Window
     private readonly CancellationTokenSource lifetime = new();
     private readonly Func<BitmapSource, CancellationToken, Task> copy;
     private readonly Func<Window, string?> chooseSavePath;
+    private readonly Func<ShortcutProfile> getShortcuts;
     private bool dragging, positioning, closed;
     private PixelPoint dragAnchor, dragOrigin;
 
     internal PinWindow(BitmapSource image, PixelRect selection,
-        Func<BitmapSource, CancellationToken, Task>? copy = null, Func<Window, string?>? chooseSavePath = null)
+        Func<BitmapSource, CancellationToken, Task>? copy = null, Func<Window, string?>? chooseSavePath = null,
+        Func<ShortcutProfile>? getShortcuts = null)
     {
         Original = image;
         this.copy = copy ?? ((source, token) => ImageOutput.Copy(source, token));
         this.chooseSavePath = chooseSavePath ?? ChooseSavePath;
+        this.getShortcuts = getShortcuts ?? (() => ShortcutProfile.Default);
         Geometry = new(image.PixelWidth, image.PixelHeight, new(selection.Left, selection.Top), WorkArea(new(selection.Left, selection.Top)));
         WindowStyle = WindowStyle.None; ResizeMode = ResizeMode.NoResize;
         AllowsTransparency = true;
@@ -58,7 +61,8 @@ internal sealed class PinWindow : Window
         AddMenu(menu, "恢复原始比例", ResetScale);
         menu.Items.Add(new Separator()); AddMenu(menu, "关闭贴图    Esc", Close);
         ContextMenu = menu;
-        menu.Opened += (_, _) => { foreach (var item in menu.Items) if (item is MenuItem action) action.IsEnabled = !Busy; };
+        RefreshShortcuts();
+        menu.Opened += (_, _) => { RefreshShortcuts(); foreach (var item in menu.Items) if (item is MenuItem action) action.IsEnabled = !Busy; };
         SourceInitialized += (_, _) => ApplyBounds();
         Loaded += (_, _) => ApplyBounds();
         DpiChanged += (_, _) => Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() => { if (!closed) ApplyBounds(); }));
@@ -82,13 +86,27 @@ internal sealed class PinWindow : Window
         MouseLeftButtonUp += (_, _) => { dragging = false; ReleaseMouseCapture(); };
         LostMouseCapture += (_, _) => dragging = false;
         MouseWheel += (_, e) => { if (!Busy && !dragging) { Zoom(e.Delta > 0 ? 1.1 : 1 / 1.1); e.Handled = true; } };
-        PreviewKeyDown += async (_, e) =>
-        {
-            if (e.Key == Key.Escape) { e.Handled = true; Close(); }
-            else if (e.Key == Key.C && Keyboard.Modifiers == ModifierKeys.Control) { e.Handled = true; await CopyImage(); }
-            else if (e.Key == Key.S && Keyboard.Modifiers == ModifierKeys.Control) { e.Handled = true; SaveImage(); }
-        };
+        PreviewKeyDown += async (_, e) => await HandleKey(e, Keyboard.Modifiers);
         Closed += (_, _) => { closed = true; lifetime.Cancel(); lifetime.Dispose(); picture.Source = null; Original = null; };
+    }
+
+    internal void RefreshShortcuts()
+    {
+        var keys = getShortcuts();
+        picture.ToolTip = $"拖动移动 · 滚轮缩放 · 双击关闭\n{keys[ShortcutAction.Copy]} 复制 · {keys[ShortcutAction.Save]} 保存 · {keys[ShortcutAction.Cancel]} 关闭 · 右键恢复原始比例";
+        if (ContextMenu == null) return;
+        foreach (var (index, label, action) in new[] { (0, "复制图片", ShortcutAction.Copy), (1, "保存 PNG", ShortcutAction.Save), (4, "关闭贴图", ShortcutAction.Cancel) })
+        {
+            var item = (MenuItem)ContextMenu.Items[index]; item.Header = label; item.InputGestureText = keys[action].ToString();
+        }
+    }
+
+    internal async Task HandleKey(KeyEventArgs e, ModifierKeys modifiers)
+    {
+        var keys = getShortcuts();
+        if (keys.Matches(ShortcutAction.Cancel, e, modifiers)) { e.Handled = true; Close(); }
+        else if (keys.Matches(ShortcutAction.Copy, e, modifiers)) { e.Handled = true; await CopyImage(); }
+        else if (keys.Matches(ShortcutAction.Save, e, modifiers)) { e.Handled = true; SaveImage(); }
     }
 
     internal static BitmapSource Detach(BitmapSource image)

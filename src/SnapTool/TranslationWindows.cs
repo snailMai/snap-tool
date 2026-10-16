@@ -29,14 +29,12 @@ internal static class TranslationUi
     }
 }
 
-internal sealed class TranslationSettingsWindow : Window
+internal sealed class TranslationSettingsPanel : ScrollViewer
 {
-    internal TranslationSettingsWindow(TranslationSettings settings)
+    internal TranslationSettingsPanel(Func<YoudaoCredentials> load, Action<YoudaoCredentials> save)
     {
-        TranslationUi.Style(this); Title = "Snap Tool · 有道翻译设置";
-        Width = 550; Height = 560; ResizeMode = ResizeMode.NoResize;
-        var panel = new StackPanel { Margin = new Thickness(28) };
-        Content = new ScrollViewer { Content = panel, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+        var panel = new StackPanel { Margin = new Thickness(16) };
+        Content = panel; VerticalScrollBarVisibility = ScrollBarVisibility.Auto; HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled;
         panel.Children.Add(TranslationUi.Text("连接有道文本翻译", 23));
         panel.Children.Add(TranslationUi.Text("请在有道智云创建应用，并绑定“文本翻译”服务。这里填写的是 API 应用凭据，不是有道账号密码。"));
         panel.Children.Add(TranslationUi.Text("应用 ID"));
@@ -47,17 +45,16 @@ internal sealed class TranslationSettingsWindow : Window
         panel.Children.Add(secret);
         panel.Children.Add(TranslationUi.Text("仅在主动翻译时发送识别文字给有道，不上传截图。密钥加密保存在当前 Windows 用户下；保存设置不会调用接口。"));
         var status = TranslationUi.Text(""); status.Foreground = Brushes.Firebrick; panel.Children.Add(status);
-        try { var saved = settings.Load(); appId.Text = saved.AppId; secret.Password = saved.Secret; }
+        try { var saved = load(); appId.Text = saved.AppId; secret.Password = saved.Secret; }
         catch { status.Text = "已有配置无法读取，请重新填写并保存。"; }
         var actions = new StackPanel { Orientation = Orientation.Horizontal };
         actions.Children.Add(TranslationUi.Button("保存", () =>
         {
-            try { settings.Save(new(appId.Text.Trim(), secret.Password.Trim())); Close(); }
-            catch (ArgumentException ex) { status.Text = ex.Message; }
-            catch { status.Text = "保存失败，请检查当前用户的配置目录权限后重试。"; }
+            try { save(new(appId.Text.Trim(), secret.Password.Trim())); status.Foreground = TranslationUi.Muted; status.Text = "翻译设置已保存。"; }
+            catch (ArgumentException ex) { status.Foreground = Brushes.Firebrick; status.Text = ex.Message; }
+            catch { status.Foreground = Brushes.Firebrick; status.Text = "保存失败，请检查当前用户的配置目录权限后重试。"; }
         }, true));
-        actions.Children.Add(TranslationUi.Button("取消", Close)); panel.Children.Add(actions);
-        PreviewKeyDown += (_, e) => { if (e.Key == Key.Escape) { e.Handled = true; Close(); } };
+        panel.Children.Add(actions);
     }
 }
 
@@ -72,12 +69,14 @@ internal sealed class TranslationWindow : Window
     private readonly TranslationSession session;
     private readonly CancellationTokenSource lifetime = new();
     private readonly Func<string, CancellationToken, Task> copyText;
+    private readonly Func<ShortcutProfile> getShortcuts;
     private bool closed, closing;
 
     internal TranslationWindow(string original, Func<string, string, CancellationToken, Task<string>> translate,
-        Func<string, CancellationToken, Task>? copyText = null)
+        Func<string, CancellationToken, Task>? copyText = null, Func<ShortcutProfile>? getShortcuts = null)
     {
         this.copyText = copyText ?? ImageOutput.CopyText;
+        this.getShortcuts = getShortcuts ?? (() => ShortcutProfile.Default);
         TranslationUi.Style(this); Title = "Snap Tool · 原文与译文";
         Width = 900; Height = 610; MinWidth = 730; MinHeight = 460;
         session = new TranslationSession(translate);
@@ -123,9 +122,14 @@ internal sealed class TranslationWindow : Window
             { if (!closed && !closing && !IsActive) Close(); }));
         };
         Closing += (_, _) => closing = true;
-        PreviewKeyDown += (_, e) =>
-        { if (e.Key == Key.Escape) { e.Handled = true; if (session.Busy) session.Cancel(); else Close(); } };
+        PreviewKeyDown += (_, e) => HandleKey(e, Keyboard.Modifiers);
         Closed += (_, _) => { closed = true; session.Changed -= Refresh; session.Close(); lifetime.Cancel(); lifetime.Dispose(); };
+    }
+
+    internal void HandleKey(KeyEventArgs e, ModifierKeys modifiers)
+    {
+        if (!getShortcuts().Matches(ShortcutAction.Cancel, e, modifiers)) return;
+        e.Handled = true; if (session.Busy) session.Cancel(); else Close();
     }
 
     private static TextBox CreateTextBox(bool readOnly) => new()

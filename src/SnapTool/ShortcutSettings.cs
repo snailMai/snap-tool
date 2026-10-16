@@ -1,0 +1,115 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using System.Windows.Input;
+
+namespace SnapTool;
+
+internal enum ShortcutAction { Capture, Copy, Pin, Save, Ocr, Translate, Undo, Delete, Cancel }
+
+internal sealed record ShortcutGesture(Key Key, ModifierKeys Modifiers)
+{
+    internal bool Matches(Key key, ModifierKeys modifiers) => Key == key && Modifiers == modifiers;
+    internal static string KeyName(Key key) => key switch
+    {
+        Key.Escape => "Esc", Key.Return => "Enter", Key.Back => "Backspace",
+        >= Key.D0 and <= Key.D9 => ((int)key - (int)Key.D0).ToString(System.Globalization.CultureInfo.InvariantCulture),
+        _ => key.ToString()
+    };
+    public override string ToString() =>
+        (Modifiers.HasFlag(ModifierKeys.Control) ? "Ctrl+" : "") +
+        (Modifiers.HasFlag(ModifierKeys.Alt) ? "Alt+" : "") +
+        (Modifiers.HasFlag(ModifierKeys.Shift) ? "Shift+" : "") + KeyName(Key);
+}
+
+internal sealed class ShortcutProfile
+{
+    internal static readonly (ShortcutAction Action, string Label)[] Actions = [
+        (ShortcutAction.Capture, "开始截图（全局）"), (ShortcutAction.Copy, "复制／完成并复制"),
+        (ShortcutAction.Pin, "选区贴图"), (ShortcutAction.Save, "保存图片"), (ShortcutAction.Ocr, "OCR"),
+        (ShortcutAction.Translate, "选区翻译"), (ShortcutAction.Undo, "撤销标注"),
+        (ShortcutAction.Delete, "删除标注"), (ShortcutAction.Cancel, "取消／关闭")];
+    internal static readonly Key[] Keys = Enum.GetValues<Key>().Distinct().Where(key =>
+        key is >= Key.A and <= Key.Z or >= Key.D0 and <= Key.D9 or >= Key.F1 and <= Key.F24 or
+            Key.Escape or Key.Delete or Key.Return or Key.Back or Key.Tab or Key.Space or Key.Insert or
+            Key.Home or Key.End or Key.PageUp or Key.PageDown or Key.Left or Key.Right or Key.Up or Key.Down or Key.Snapshot).ToArray();
+    internal static ShortcutProfile Default { get; } = new(new()
+    {
+        [ShortcutAction.Capture] = new(Key.F2, ModifierKeys.Control), [ShortcutAction.Copy] = new(Key.C, ModifierKeys.Control),
+        [ShortcutAction.Pin] = new(Key.T, ModifierKeys.Control), [ShortcutAction.Save] = new(Key.S, ModifierKeys.Control),
+        [ShortcutAction.Ocr] = new(Key.C, ModifierKeys.Shift), [ShortcutAction.Translate] = new(Key.T, ModifierKeys.Shift),
+        [ShortcutAction.Undo] = new(Key.Z, ModifierKeys.Control), [ShortcutAction.Delete] = new(Key.Delete, ModifierKeys.None),
+        [ShortcutAction.Cancel] = new(Key.Escape, ModifierKeys.None)
+    });
+    private readonly Dictionary<ShortcutAction, ShortcutGesture> bindings;
+    internal ShortcutGesture this[ShortcutAction action] => bindings[action];
+    internal ShortcutProfile(Dictionary<ShortcutAction, ShortcutGesture> bindings) => this.bindings = new(bindings);
+    internal Dictionary<ShortcutAction, ShortcutGesture> Export() => new(bindings);
+    internal bool Matches(ShortcutAction action, KeyEventArgs e, ModifierKeys modifiers) =>
+        this[action].Matches(e.Key == Key.System ? e.SystemKey : e.Key, modifiers);
+    internal void Validate()
+    {
+        if (bindings.Count != Actions.Length || Actions.Any(a => !bindings.ContainsKey(a.Action)))
+            throw new ArgumentException("快捷键配置不完整，请恢复默认后重试。");
+        foreach (var (action, label) in Actions)
+        {
+            var value = bindings[action];
+            if (value == null || !Keys.Contains(value.Key) || (value.Modifiers & ~(ModifierKeys.Control | ModifierKeys.Alt | ModifierKeys.Shift)) != 0)
+                throw new ArgumentException($"“{label}”的快捷键无效。");
+        }
+        var capture = this[ShortcutAction.Capture];
+        if (capture.Key == Key.F12) throw new ArgumentException("F12 是 Windows 调试器保留键，请选择其他截图快捷键。");
+        if ((capture.Modifiers & (ModifierKeys.Control | ModifierKeys.Alt)) == 0 &&
+            !(capture.Key is >= Key.F1 and <= Key.F24 or Key.Snapshot))
+            throw new ArgumentException("全局截图请使用 Ctrl／Alt 组合键，或 F1～F24 功能键。");
+        foreach (var group in Actions.GroupBy(a => bindings[a.Action]).Where(g => g.Count() > 1))
+            throw new ArgumentException($"{group.Key} 重复用于 {string.Join("、", group.Select(a => a.Label))}，请分别设置。");
+    }
+}
+
+internal sealed class ShortcutSettings(string? filePath = null)
+{
+    private readonly string path = filePath ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SnapTool", "shortcuts.json");
+    private static readonly JsonSerializerOptions Options = new() { WriteIndented = true,
+        Converters = { new JsonStringEnumConverter(allowIntegerValues: false) } };
+    internal ShortcutProfile Load()
+    {
+        if (!File.Exists(path)) return ShortcutProfile.Default;
+        var bindings = JsonSerializer.Deserialize<Dictionary<ShortcutAction, ShortcutGesture>>(File.ReadAllText(path), Options)
+            ?? throw new JsonException("快捷键配置为空。");
+        var profile = new ShortcutProfile(bindings); profile.Validate(); return profile;
+    }
+    internal void Save(ShortcutProfile profile)
+    {
+        profile.Validate();
+        string fullPath = Path.GetFullPath(path); Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
+        string temp = fullPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try { File.WriteAllText(temp, JsonSerializer.Serialize(profile.Export(), Options)); File.Move(temp, fullPath, true); }
+        finally { if (File.Exists(temp)) File.Delete(temp); }
+    }
+}
+
+internal sealed class CaptureHotkey : IDisposable
+{
+    private readonly Func<int, ShortcutGesture, bool> register;
+    private readonly Action<int> unregister;
+    internal ShortcutGesture Current { get; private set; }
+    internal int Id { get; private set; } = 1;
+    internal bool Registered { get; private set; }
+    internal CaptureHotkey(ShortcutGesture current, Func<int, ShortcutGesture, bool> register, Action<int> unregister)
+    { Current = current; this.register = register; this.unregister = unregister; }
+    internal void Apply(ShortcutGesture next, Action persist)
+    {
+        if (Registered && next == Current) { persist(); return; }
+        int candidate = Registered ? (Id == 1 ? 2 : 1) : Id;
+        if (!register(candidate, next)) throw new InvalidOperationException($"无法注册 {next}，可能已被其他程序占用。原设置已保留。");
+        try { persist(); }
+        catch { unregister(candidate); throw; }
+        if (Registered) unregister(Id);
+        Id = candidate; Current = next; Registered = true;
+    }
+    public void Dispose() { if (Registered) { unregister(Id); Registered = false; } }
+}

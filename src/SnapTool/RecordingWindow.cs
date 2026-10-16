@@ -19,6 +19,7 @@ internal sealed class RecordingWindow : Window
     private readonly PixelRect region, screen;
     private readonly RecordingSize size;
     private readonly Func<string, CancellationToken, Task> copyGif;
+    private readonly Func<ShortcutProfile> getShortcuts;
     private readonly Action<string, string> notify;
     private readonly CancellationTokenSource cancellation = new();
     private readonly DispatcherTimer timer = new() { Interval = TimeSpan.FromMilliseconds(200) };
@@ -34,9 +35,10 @@ internal sealed class RecordingWindow : Window
 
     internal RecordingWindow(PixelRect region, Action<string, string> notify,
         Func<CancellationToken, Task<SoftwareBitmap>>? readFrame = null,
-        Func<string, CancellationToken, Task>? copyGif = null, string? temporaryDirectory = null)
+        Func<string, CancellationToken, Task>? copyGif = null, string? temporaryDirectory = null, Func<ShortcutProfile>? getShortcuts = null)
     {
         this.region = region; this.notify = notify; this.copyGif = copyGif ?? ImageOutput.CopyGif;
+        this.getShortcuts = getShortcuts ?? (() => ShortcutProfile.Default);
         this.readFrame = readFrame;
         screen = Native.Monitors().Single(m => region.Intersect(m) == region);
         size = RecordingSize.Fit(region); job = new(size, temporaryDirectory); border = new(region);
@@ -50,7 +52,7 @@ internal sealed class RecordingWindow : Window
         cancelButton = new Button { Content = "取消", Padding = new Thickness(12, 5, 12, 5) };
         stopButton.Click += async (_, _) => await Stop(); cancelButton.Click += async (_, _) => await Cancel();
         actions.Children.Add(stopButton); actions.Children.Add(cancelButton); panel.Children.Add(actions); Content = panel;
-        ToolTip = "本窗口内 Ctrl+C 完成并复制 GIF，Esc 取消。";
+        RefreshShortcuts();
         PreviewKeyDown += async (_, e) => await HandleKey(e, Keyboard.Modifiers);
         timer.Tick += (_, _) => { if (recording && !stopping) status.Text = $"● 录制中 {job.Elapsed:mm\\:ss} · {size.Width} × {size.Height} · GIF 动图"; };
         Closing += OnClosing;
@@ -60,9 +62,11 @@ internal sealed class RecordingWindow : Window
 
     internal async Task HandleKey(KeyEventArgs e, ModifierKeys modifiers)
     {
-        if (e.Key == Key.Escape) { e.Handled = true; await Cancel(); }
-        else if (e.Key == Key.C && modifiers == ModifierKeys.Control) { e.Handled = true; await Stop(); }
+        if (getShortcuts().Matches(ShortcutAction.Cancel, e, modifiers)) { e.Handled = true; await Cancel(); }
+        else if (getShortcuts().Matches(ShortcutAction.Copy, e, modifiers)) { e.Handled = true; await Stop(); }
     }
+
+    internal void RefreshShortcuts() => ToolTip = $"本窗口内 {getShortcuts()[ShortcutAction.Copy]} 完成并复制 GIF，{getShortcuts()[ShortcutAction.Cancel]} 取消。";
 
     internal void Start()
     {

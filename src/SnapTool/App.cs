@@ -15,7 +15,6 @@ namespace SnapTool;
 
 internal sealed class App : Application
 {
-    private const int HotkeyId = 1;
     private Mutex? instance;
     private HwndSource? source;
     private Forms.NotifyIcon? tray;
@@ -25,11 +24,16 @@ internal sealed class App : Application
     private RecordingWindow? recording;
     private bool exiting;
     private bool sessionNotifications;
-    private bool registered;
+    private readonly ShortcutSettings shortcutSettings = new();
+    private ShortcutProfile shortcuts = ShortcutProfile.Default;
+    private CaptureHotkey? captureHotkey;
+    private SettingsWindow? configuration;
+    private Forms.ToolStripMenuItem? captureMenu;
     private readonly OcrService ocr = new();
     private readonly TranslationSettings translationSettings = new();
     private readonly YoudaoTranslator translator = new();
-    private readonly PinWindows pins = new();
+    private readonly PinWindows pins;
+    internal App() { pins = new(() => shortcuts); }
 
     [STAThread]
     public static void Main(string[] args)
@@ -53,24 +57,33 @@ internal sealed class App : Application
         if (!created)
         {
             instance.Dispose(); instance = null;
-            MessageBox.Show("Snap Tool 已在运行。按 Ctrl+F2 截图，或从系统托盘打开。", "Snap Tool");
+            MessageBox.Show("Snap Tool 已在运行，请使用已配置的截图快捷键，或从系统托盘打开。", "Snap Tool");
             Shutdown(); return;
         }
         source = new HwndSource(new HwndSourceParameters("Snap Tool Hotkey") { Width = 0, Height = 0, WindowStyle = 0 });
         source.AddHook(WindowMessage);
+        bool invalidSettings = false;
+        try { shortcuts = shortcutSettings.Load(); }
+        catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException or ArgumentException or System.Text.Json.JsonException)
+        { shortcuts = ShortcutProfile.Default; invalidSettings = true; }
+        captureHotkey = new(shortcuts[ShortcutAction.Capture],
+            (id, key) => Native.RegisterHotKey(source.Handle, id, (uint)key.Modifiers | 0x4000, (uint)System.Windows.Input.KeyInterop.VirtualKeyFromKey(key.Key)),
+            id => { if (source != null) Native.UnregisterHotKey(source.Handle, id); });
         icon = MakeIcon();
         var menu = new Forms.ContextMenuStrip();
-        menu.Items.Add("截图    Ctrl+F2", null, (_, _) => QueueCapture());
-        menu.Items.Add("重新注册 Ctrl+F2", null, (_, _) => RegisterHotkey(true));
-        menu.Items.Add("翻译设置…", null, (_, _) => ShowTranslationSettings());
+        captureMenu = (Forms.ToolStripMenuItem)menu.Items.Add("截图", null, (_, _) => QueueCapture());
+        menu.Items.Add("配置…", null, (_, _) => ShowConfiguration());
+        menu.Items.Add("重新注册截图快捷键", null, (_, _) => RegisterHotkey(true));
         menu.Items.Add("关闭全部贴图", null, (_, _) => pins.CloseAll());
         menu.Items.Add(new Forms.ToolStripSeparator());
         menu.Items.Add("退出", null, async (_, _) => await ExitSafely());
-        tray = new Forms.NotifyIcon { Icon = icon, Text = "Snap Tool · Ctrl+F2 截图", ContextMenuStrip = menu, Visible = true };
+        tray = new Forms.NotifyIcon { Icon = icon, ContextMenuStrip = menu, Visible = true };
+        RefreshShortcuts();
         tray.DoubleClick += (_, _) => QueueCapture();
         RegisterHotkey(false);
         sessionNotifications = Native.WTSRegisterSessionNotification(source.Handle, 0);
-        if (registered) Notify("已准备好", "按 Ctrl+F2 框选截图；右键托盘图标可退出。");
+        if (invalidSettings) Notify("快捷键配置无法读取", "已临时使用默认快捷键；可在托盘右键“配置”中重新保存，原文件未覆盖。");
+        else if (captureHotkey.Registered) Notify("已准备好", $"按 {shortcuts[ShortcutAction.Capture]} 框选截图；右键托盘图标可配置或退出。");
         if (capture) QueueCapture();
     }
 
@@ -92,24 +105,44 @@ internal sealed class App : Application
 
     private void RegisterHotkey(bool notifySuccess)
     {
-        if (registered)
+        try
         {
-            if (notifySuccess) Notify("快捷键可用", "Ctrl+F2 已注册。");
-            return;
+            captureHotkey!.Apply(shortcuts[ShortcutAction.Capture], () => { });
+            if (notifySuccess) Notify("快捷键可用", $"{captureHotkey.Current} 已注册。");
         }
-        registered = Native.RegisterHotKey(source!.Handle, HotkeyId, 0x0002 | 0x4000, 0x71);
-        if (!registered)
+        catch (InvalidOperationException ex)
+        { MessageBox.Show(ex.Message + "\n可通过托盘右键“配置”修改，或释放占用后重新注册。也可从托盘菜单截图。", "Snap Tool · 快捷键不可用", MessageBoxButton.OK, MessageBoxImage.Warning); }
+    }
+
+    private void ShowConfiguration()
+    {
+        if (configuration != null) { configuration.Activate(); return; }
+        configuration = new(shortcuts, next =>
         {
-            int code = System.Runtime.InteropServices.Marshal.GetLastWin32Error();
-            MessageBox.Show("无法注册 Ctrl+F2，可能已被其他程序占用。\n请释放该快捷键后，从托盘菜单选择“重新注册 Ctrl+F2”。\n也可从托盘菜单截图。\n\n错误代码：" + code,
-                "Snap Tool · 快捷键不可用", MessageBoxButton.OK, MessageBoxImage.Warning);
-        }
-        else if (notifySuccess) Notify("快捷键可用", "Ctrl+F2 已注册。");
+            next.Validate(); captureHotkey!.Apply(next[ShortcutAction.Capture], () => shortcutSettings.Save(next));
+            shortcuts = next; RefreshShortcuts();
+        }, translationSettings.Load, translationSettings.Save);
+        try { configuration.ShowDialog(); }
+        finally { configuration = null; }
+    }
+
+    private void RefreshShortcuts()
+    {
+        if (captureMenu != null) captureMenu.Text = $"截图    {shortcuts[ShortcutAction.Capture]}";
+        if (tray != null) tray.Text = $"Snap Tool · {shortcuts[ShortcutAction.Capture]} 截图";
+        foreach (Window window in Windows)
+            switch (window)
+            {
+                case OverlayWindow overlay: overlay.Refresh(); break;
+                case PinWindow pin: pin.RefreshShortcuts(); break;
+                case ScrollCaptureWindow scroll: scroll.RefreshShortcuts(); break;
+                case RecordingWindow recordingWindow: recordingWindow.RefreshShortcuts(); break;
+            }
     }
 
     private IntPtr WindowMessage(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
-        if (message == 0x0312 && wParam.ToInt32() == HotkeyId)
+        if (message == 0x0312 && captureHotkey is { Registered: true } && wParam.ToInt32() == captureHotkey.Id)
         {
             handled = true;
             QueueCapture();
@@ -123,7 +156,7 @@ internal sealed class App : Application
     private bool queued;
     private void QueueCapture()
     {
-        if (session != null || scrollCapture != null || recording != null || queued || exiting) return;
+        if (session != null || scrollCapture != null || recording != null || configuration != null || queued || exiting) return;
         queued = true;
         Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(async () =>
         {
@@ -142,7 +175,7 @@ internal sealed class App : Application
                     windowTargets: windowTargets.Select(target => target.Bounds).ToArray(),
                     showScroll: (region, image) => ShowScrollCapture(region, image,
                         windowTargets.FirstOrDefault(w => w.Bounds.Contains(new(region.Left + region.Width / 2, region.Top + region.Height / 2)))),
-                    showRecording: ShowRecording);
+                    showRecording: ShowRecording, getShortcuts: () => shortcuts);
                 session.Show();
             }
             catch (Exception ex)
@@ -160,7 +193,7 @@ internal sealed class App : Application
     {
         if (!sessionNotifications) throw new InvalidOperationException("无法监听锁屏状态，请退出后重新启动再录屏。");
         if (!global::Windows.Graphics.Capture.GraphicsCaptureSession.IsSupported()) throw new InvalidOperationException("当前系统不支持屏幕录制。");
-        var window = new RecordingWindow(region, Notify); recording = window;
+        var window = new RecordingWindow(region, Notify, getShortcuts: () => shortcuts); recording = window;
         window.Closed += (_, _) => { if (recording == window) recording = null; if (session == null) pins.Resume(); };
         try { window.Start(); return true; }
         catch { window.Close(); throw; }
@@ -185,23 +218,17 @@ internal sealed class App : Application
                 token.ThrowIfCancellationRequested();
                 Notify("长截图已复制", warning.Length == 0 ? "可直接粘贴到其他应用。" : "已复制成功拼接的部分。" + warning);
             },
-            canCapture: () => scrollCapture != null && WindowTargets.CanCaptureRegion(target, region, scrollCapture.CaptureWindows));
+            canCapture: () => scrollCapture != null && WindowTargets.CanCaptureRegion(target, region, scrollCapture.CaptureWindows), getShortcuts: () => shortcuts);
         scrollCapture = window;
         window.Closed += (_, _) => { if (scrollCapture == window) scrollCapture = null; if (session == null) pins.Resume(); };
         try { window.Start(); }
         catch { window.Close(); throw; }
     }
 
-    private void ShowTranslationSettings()
-    {
-        var window = new TranslationSettingsWindow(translationSettings);
-        window.ShowDialog();
-    }
-
     private void ShowTranslation(string text)
     {
         var window = new TranslationWindow(text,
-            (original, target, token) => translator.Translate(original, target, translationSettings.Load(), token));
+            (original, target, token) => translator.Translate(original, target, translationSettings.Load(), token), getShortcuts: () => shortcuts);
         window.Show(); window.Activate();
     }
 
@@ -213,7 +240,7 @@ internal sealed class App : Application
         ocr.Dispose();
         translator.Dispose();
         if (source != null) Native.WTSUnRegisterSessionNotification(source.Handle);
-        if (registered && source != null) Native.UnregisterHotKey(source.Handle, HotkeyId);
+        captureHotkey?.Dispose();
         source?.Dispose(); source = null;
         if (tray != null) { tray.Visible = false; tray.ContextMenuStrip?.Dispose(); tray.Dispose(); }
         icon?.Dispose();

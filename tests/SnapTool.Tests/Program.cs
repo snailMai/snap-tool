@@ -25,6 +25,9 @@ internal static class Program
         if (args.Contains("--number-preview")) { NumberAnnotationChecks.RenderPreview(); return 0; }
         if (args.Contains("--text-preview")) { TextAnnotationChecks.RenderPreview(); return 0; }
         if (args.Contains("--text-checks")) { TextAnnotationChecks.Run(Test); return failed == 0 ? 0 : 1; }
+        if (args.Contains("--shortcut-settings-checks")) { ShortcutSettingsChecks.Run(Test); return failed == 0 ? 0 : 1; }
+        if (args.Contains("--shortcut-settings-preview")) { ShortcutSettingsChecks.RenderPreview(); return 0; }
+        if (args.Contains("--shortcut-settings-window-checks")) { Test("native shortcut configuration", ShortcutSettingsChecks.CheckNative); return failed == 0 ? 0 : 1; }
         if (args.Contains("--text-window-checks")) { Test("native text editor", TextAnnotationChecks.CheckWindow); return failed == 0 ? 0 : 1; }
         if (args.Contains("--scroll-checks")) { ScrollChecks.Run(Test); return failed == 0 ? 0 : 1; }
         if (args.Contains("--scroll-window-checks")) { Test("native scroll capture", ScrollChecks.CheckNativeWindows); return failed == 0 ? 0 : 1; }
@@ -150,6 +153,7 @@ internal static class Program
         RecordingChecks.Run(Test);
         PinChecks.Run(Test);
         ShortcutChecks.Run(Test);
+        ShortcutSettingsChecks.Run(Test);
         WindowSelectionChecks.Run(Test);
         RefreshChecks.Run(Test);
         ScrollChecks.Run(Test);

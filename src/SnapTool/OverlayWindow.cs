@@ -21,6 +21,7 @@ internal sealed partial class OverlayWindow : Window
     private readonly Canvas canvas;
     private readonly Border toolbar;
     private readonly List<Button> outputButtons = [];
+    private Button cancelButton = null!;
     private Button rectangleButton = null!, arrowButton = null!, textButton = null!, numberButton = null!, mosaicButton = null!, undoButton = null!;
     private TextBlock colorLabel = null!;
     private TextBlock thicknessLabel = null!;
@@ -87,7 +88,7 @@ internal sealed partial class OverlayWindow : Window
         outputButtons.Add(AddButton(panel, "OCR", "识别文字，Shift+C", async () => await session.RecognizeText()));
         outputButtons.Add(AddButton(panel, "翻译", "有道文本翻译，Shift+T", async () => await session.RecognizeText(true)));
         outputButtons.Add(AddButton(panel, "保存", "保存 PNG，Ctrl+S", () => session.Save(this)));
-        AddButton(panel, "取消", "取消截图，Esc", () => session.Close());
+        cancelButton = AddButton(panel, "取消", "取消截图，Esc", () => session.Close());
         var tools = new StackPanel { Orientation = Orientation.Horizontal };
         rectangleButton = AddButton(tools, "矩形", "绘制矩形；Shift 正方形；再次点击退出绘制", () => session.ToggleTool(AnnotationKind.Rectangle));
         arrowButton = AddButton(tools, "箭头", "绘制箭头；Shift 限制方向；再次点击退出绘制", () => session.ToggleTool(AnnotationKind.Arrow));
@@ -189,6 +190,24 @@ internal sealed partial class OverlayWindow : Window
     internal void Refresh()
     {
         surface.InvalidateVisual();
+        foreach (var button in outputButtons)
+        {
+            string? tooltip = (button.Tag as string) switch
+            {
+                "复制" => $"复制图片，{session.Shortcuts[ShortcutAction.Copy]}",
+                "贴图" => $"当前选区置顶贴图，{session.Shortcuts[ShortcutAction.Pin]}",
+                "OCR" => $"识别文字，{session.Shortcuts[ShortcutAction.Ocr]}",
+                "翻译" => $"有道文本翻译，{session.Shortcuts[ShortcutAction.Translate]}",
+                "保存" => $"保存 PNG，{session.Shortcuts[ShortcutAction.Save]}",
+                "撤销" => $"撤销标注，{session.Shortcuts[ShortcutAction.Undo]}",
+                "录屏" => $"录制选区为 GIF 动图；录屏窗口内 {session.Shortcuts[ShortcutAction.Copy]} 完成并复制，取消放弃",
+                _ => null
+            };
+            if (tooltip != null)
+            { button.ToolTip = tooltip; System.Windows.Automation.AutomationProperties.SetHelpText(button, tooltip); }
+        }
+        cancelButton.ToolTip = $"取消截图，{session.Shortcuts[ShortcutAction.Cancel]}";
+        System.Windows.Automation.AutomationProperties.SetHelpText(cancelButton, (string)cancelButton.ToolTip);
         foreach (var button in outputButtons) { button.IsEnabled = !session.Busy; button.Opacity = session.Busy ? 0.5 : 1; }
         undoButton.IsEnabled = !session.Busy && session.Annotations.CanUndo;
         rectangleButton.Background = session.Tool == AnnotationKind.Rectangle ? ActiveToolBackground : ToolBackground;
@@ -234,22 +253,22 @@ internal sealed partial class OverlayWindow : Window
             return;
         }
         if (Keyboard.FocusedElement is System.Windows.Controls.Primitives.TextBoxBase || e.OriginalSource is System.Windows.Controls.Primitives.TextBoxBase) return;
-        if (e.Key == Key.Escape && (!session.Busy || session.Recognizing))
+        if (session.Shortcuts.Matches(ShortcutAction.Cancel, e, modifiers) && (!session.Busy || session.Recognizing))
         { e.Handled = true; session.Close(); return; }
         if (session.Busy) { e.Handled = true; return; }
-        if (e.Key == Key.C && modifiers == ModifierKeys.Control)
+        if (session.Shortcuts.Matches(ShortcutAction.Copy, e, modifiers))
         { e.Handled = true; await session.Copy(this); }
-        else if (e.Key == Key.T && modifiers == ModifierKeys.Control)
+        else if (session.Shortcuts.Matches(ShortcutAction.Pin, e, modifiers))
         { e.Handled = true; session.Pin(); }
-        else if (e.Key == Key.Z && modifiers == ModifierKeys.Control)
+        else if (session.Shortcuts.Matches(ShortcutAction.Undo, e, modifiers))
         { e.Handled = true; session.UndoAnnotation(); }
-        else if (e.Key == Key.Delete && modifiers == ModifierKeys.None)
+        else if (session.Shortcuts.Matches(ShortcutAction.Delete, e, modifiers))
         { e.Handled = true; session.DeleteAnnotation(); }
-        else if (e.Key == Key.C && modifiers == ModifierKeys.Shift)
+        else if (session.Shortcuts.Matches(ShortcutAction.Ocr, e, modifiers))
         { e.Handled = true; await session.RecognizeText(); }
-        else if (e.Key == Key.T && modifiers == ModifierKeys.Shift)
+        else if (session.Shortcuts.Matches(ShortcutAction.Translate, e, modifiers))
         { e.Handled = true; await session.RecognizeText(true); }
-        else if (e.Key == Key.S && modifiers == ModifierKeys.Control)
+        else if (session.Shortcuts.Matches(ShortcutAction.Save, e, modifiers))
         { e.Handled = true; session.Save(this); }
     }
 }
@@ -361,10 +380,10 @@ internal sealed class SelectionSurface : FrameworkElement
                 dc.DrawLine(pen, new Point(x, 0), new Point(x, ActualHeight));
                 dc.DrawLine(pen, new Point(0, y), new Point(ActualWidth, y));
             }
-            DrawHint(dc, "SNAP TOOL   /   区域截图", "拖动框选区域 · Esc 或右键取消", 32);
+            DrawHint(dc, "SNAP TOOL   /   区域截图", $"拖动框选区域 · {session.Shortcuts[ShortcutAction.Cancel]} 或右键取消", 32);
         }
         if (session.AutoSelecting && !selected.IsEmpty && screen.Contains(session.Pointer))
-            DrawHint(dc, "自动识别窗口", "单击固定窗口选区 · 拖动自行框选 · Esc 或右键取消", 32);
+            DrawHint(dc, "自动识别窗口", $"单击固定窗口选区 · 拖动自行框选 · {session.Shortcuts[ShortcutAction.Cancel]} 或右键取消", 32);
     }
 
     private FormattedText Text(string value, double size, Brush brush) =>

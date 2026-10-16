@@ -30,13 +30,21 @@ internal static class ShortcutChecks
     private static KeyEventArgs KeyEvent(Window window, Key key) =>
         new(Keyboard.PrimaryDevice, HwndSource.FromHwnd(new WindowInteropHelper(window).EnsureHandle()), Environment.TickCount, key)
             { RoutedEvent = Keyboard.PreviewKeyDownEvent };
-    internal static Task Press(Window window, Key key, ModifierKeys modifiers) => window switch
+    internal static Task Press(Window window, Key key, ModifierKeys modifiers)
     {
-        OverlayWindow overlay => overlay.HandleKey(KeyEvent(window, key), modifiers),
-        ScrollCaptureWindow scroll => scroll.HandleKey(KeyEvent(window, key), modifiers),
-        RecordingWindow recording => recording.HandleKey(KeyEvent(window, key), modifiers),
-        _ => throw new ArgumentException("Unsupported shortcut window", nameof(window))
-    };
+        var e = KeyEvent(window, key);
+        // WPF reports Alt combinations as Key.System and keeps the actual key in SystemKey.
+        if (modifiers.HasFlag(ModifierKeys.Alt))
+            typeof(KeyEventArgs).GetMethod("MarkSystem", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.Invoke(e, null);
+        return window switch
+        {
+            OverlayWindow overlay => overlay.HandleKey(e, modifiers),
+            ScrollCaptureWindow scroll => scroll.HandleKey(e, modifiers),
+            RecordingWindow recording => recording.HandleKey(e, modifiers),
+            PinWindow pin => pin.HandleKey(e, modifiers),
+            _ => throw new ArgumentException("Unsupported shortcut window", nameof(window))
+        };
+    }
     private static byte[] Pixels(BitmapSource image)
     {
         var converted = new FormatConvertedBitmap(image, PixelFormats.Pbgra32, null, 0);

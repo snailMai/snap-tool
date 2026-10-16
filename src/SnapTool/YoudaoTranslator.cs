@@ -41,7 +41,7 @@ internal sealed class YoudaoTranslator : IDisposable
         if (string.IsNullOrWhiteSpace(text)) throw new InvalidOperationException("原文为空，请先框选文字或填写原文。");
         if (text.EnumerateRunes().Count() > 5000) throw new InvalidOperationException("原文超过有道单次 5000 字符限制，请缩小选区或分段翻译。");
         if (target is not ("zh-CHS" or "en")) throw new InvalidOperationException("请选择简体中文或英文作为目标语言。");
-        if (!credentials.IsConfigured) throw new InvalidOperationException("尚未配置有道。点击“翻译设置”，填写应用 ID 和应用密钥后重试。");
+        if (!credentials.IsConfigured) throw new InvalidOperationException("尚未配置有道。请在托盘右键“配置…”的“翻译设置”页填写应用 ID 和应用密钥后重试。");
         string salt = Guid.NewGuid().ToString("N");
         string timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture);
         using var request = new HttpRequestMessage(HttpMethod.Post, "https://openapi.youdao.com/api")

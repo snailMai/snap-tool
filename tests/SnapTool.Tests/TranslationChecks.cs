@@ -178,14 +178,17 @@ internal static class TranslationChecks
     internal static void RenderPreview()
     {
         string dir = Path.Combine(Program.FindRoot(), ".tmp", "translation-preview"); Directory.CreateDirectory(dir);
-        var settings = new TranslationSettingsWindow(new TranslationSettings(Path.Combine(dir, "absent.json")));
+        var settings = new SettingsWindow(ShortcutProfile.Default, _ => { }, () => new("", ""), _ => { });
+        ((DockPanel)settings.Content).Children.OfType<TabControl>().Single().SelectedIndex = 1;
         var translation = new TranslationWindow("Please save your changes before closing the window.\n\nError code: 404", (_, _, _) => Task.FromResult("关闭窗口前，请保存更改。\n\n错误代码：404"));
         try
         {
             translation.TranslateButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-            foreach (var (window, name, width, height) in new[] { ((Window)settings, "settings", 550, 520), ((Window)translation, "translation", 900, 570) })
+            foreach (var (window, name, width, height) in new[] { ((Window)settings, "settings", 690, 680), ((Window)translation, "translation", 900, 570) })
             {
-                var content = (FrameworkElement)window.Content; content.Measure(new Size(width, height)); content.Arrange(new Rect(0, 0, width, height)); content.UpdateLayout();
+                var content = (FrameworkElement)window.Content;
+                if (window == settings) { content.Width = width - 48; content.Height = height - 48; }
+                content.Measure(new Size(width, height)); content.Arrange(new Rect(0, 0, width, height)); content.UpdateLayout();
                 var image = new RenderTargetBitmap(width, height, 96, 96, PixelFormats.Pbgra32);
                 var background = new DrawingVisual();
                 using (var drawing = background.RenderOpen()) drawing.DrawRectangle(window.Background, null, new Rect(0, 0, width, height));

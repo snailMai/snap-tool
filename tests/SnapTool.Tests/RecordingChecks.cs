@@ -163,6 +163,7 @@ internal static class RecordingChecks
                 finally { cover.Close(); }
                 string? path = null;
                 int notifications = 0, copies = 0;
+                var shortcutProfile = ShortcutProfile.Default;
                 using var videoCapture = new RecordingCapture(new(20, 20, 340, 200), new(0, 0, 400, 300), new(320, 180), handle);
                 var recorder = new RecordingWindow(new(120, 120, 440, 300), (_, _) => notifications++, videoCapture.Read,
                     async (file, token) =>
@@ -171,7 +172,7 @@ internal static class RecordingChecks
                         if (++copies == 1) throw new IOException("synthetic clipboard failure");
                         await Task.Delay(100, token);
                         await ImageOutput.CopyGifWithRetry(file, token, data => Assert(data.GetFileDropList()[0] == file));
-                    }, DirectoryPath);
+                    }, DirectoryPath, getShortcuts: () => shortcutProfile);
                 try
                 {
                     recorder.Start();
@@ -184,11 +185,14 @@ internal static class RecordingChecks
                     foreach (var modifiers in new[] { ModifierKeys.None, ModifierKeys.Shift, ModifierKeys.Control | ModifierKeys.Shift })
                         await ShortcutChecks.Press(recorder, Key.C, modifiers);
                     await ShortcutChecks.Press(recorder, Key.F2, ModifierKeys.Control); Assert(copies == 0);
-                    var stop = ShortcutChecks.Press(recorder, Key.C, ModifierKeys.Control);
-                    await ShortcutChecks.Press(recorder, Key.C, ModifierKeys.Control); await stop;
+                    var values = shortcutProfile.Export(); values[ShortcutAction.Copy] = new(Key.D, ModifierKeys.Control);
+                    shortcutProfile = new(values); shortcutProfile.Validate(); recorder.RefreshShortcuts();
+                    await ShortcutChecks.Press(recorder, Key.C, ModifierKeys.Control); Assert(copies == 0);
+                    var stop = ShortcutChecks.Press(recorder, Key.D, ModifierKeys.Control);
+                    await ShortcutChecks.Press(recorder, Key.D, ModifierKeys.Control); await stop;
                     Assert(path != null && File.Exists(path) && copies == 1 && notifications == 0 && recorder.IsVisible);
-                    var retry = ShortcutChecks.Press(recorder, Key.C, ModifierKeys.Control);
-                    await ShortcutChecks.Press(recorder, Key.C, ModifierKeys.Control); await retry;
+                    var retry = ShortcutChecks.Press(recorder, Key.D, ModifierKeys.Control);
+                    await ShortcutChecks.Press(recorder, Key.D, ModifierKeys.Control); await retry;
                     Assert(copies == 2 && notifications == 1 && !recorder.IsVisible && !app.Windows.OfType<RecordingBorder>().Any());
                     using var file = File.OpenRead(path!); using var input = file.AsRandomAccessStream();
                     var decoder = await BitmapDecoder.CreateAsync(input);

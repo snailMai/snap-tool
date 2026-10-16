@@ -18,6 +18,7 @@ internal sealed class ScrollCaptureWindow : Window
     private readonly PixelRect region;
     private readonly Func<BitmapSource> capture;
     private readonly Func<bool> canCapture;
+    private readonly Func<ShortcutProfile> getShortcuts;
     private readonly Func<BitmapSource, string, CancellationToken, Task> completed;
     private readonly DispatcherTimer timer = new() { Interval = TimeSpan.FromMilliseconds(320) };
     private readonly CancellationTokenSource lifetime = new();
@@ -38,11 +39,12 @@ internal sealed class ScrollCaptureWindow : Window
         regionWindow == null ? IntPtr.Zero : new WindowInteropHelper(regionWindow).Handle, new WindowInteropHelper(preview).Handle];
 
     internal ScrollCaptureWindow(PixelRect region, BitmapSource first, Func<BitmapSource, string, CancellationToken, Task> completed,
-        Func<BitmapSource>? capture = null, Func<bool>? canCapture = null)
+        Func<BitmapSource>? capture = null, Func<bool>? canCapture = null, Func<ShortcutProfile>? getShortcuts = null)
     {
         this.region = region; this.completed = completed;
         this.capture = capture ?? (() => DesktopSnapshot.CaptureRegion(region));
         this.canCapture = canCapture ?? (() => true);
+        this.getShortcuts = getShortcuts ?? (() => ShortcutProfile.Default);
         candidate = ScrollImages.Frame(first); stitcher = new(candidate);
         preview.Surface.Update(ScrollImages.Preview(stitcher), stitcher.Height, region.Height);
         Title = "Snap Tool · 长截图"; Width = 480; Height = 112;
@@ -55,7 +57,7 @@ internal sealed class ScrollCaptureWindow : Window
         actions.Children.Add(new TextBlock { Text = "向下滚动 · 停顿后自动拼接", Foreground = Brushes.DimGray, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0) });
         panel.Children.Add(actions); panel.Children.Add(status);
         Content = new Border { Background = Brushes.White, BorderBrush = ScrollCaptureView.Blue, BorderThickness = new Thickness(1), Child = panel };
-        ToolTip = "每次保留至少四分之一重叠内容；本窗口内 Ctrl+C 完成并复制，Esc 取消。";
+        RefreshShortcuts();
         status.Text = $"已采集 {region.Width} × {region.Height} px，等待滚动。";
         timer.Tick += (_, _) => { if (!processing && !finishing) sampling = SampleOnce(); };
         PreviewKeyDown += OnKey;
@@ -69,9 +71,11 @@ internal sealed class ScrollCaptureWindow : Window
 
     internal async Task HandleKey(KeyEventArgs e, ModifierKeys modifiers)
     {
-        if (e.Key == Key.Escape) { e.Handled = true; Close(); }
-        else if (e.Key == Key.C && modifiers == ModifierKeys.Control) { e.Handled = true; await Finish(); }
+        if (getShortcuts().Matches(ShortcutAction.Cancel, e, modifiers)) { e.Handled = true; Close(); }
+        else if (getShortcuts().Matches(ShortcutAction.Copy, e, modifiers)) { e.Handled = true; await Finish(); }
     }
+
+    internal void RefreshShortcuts() => ToolTip = $"每次保留至少四分之一重叠内容；本窗口内 {getShortcuts()[ShortcutAction.Copy]} 完成并复制，{getShortcuts()[ShortcutAction.Cancel]} 取消。";
 
     internal void Start()
     {
