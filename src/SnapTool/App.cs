@@ -25,6 +25,8 @@ internal sealed class App : Application
     private bool exiting;
     private bool sessionNotifications;
     private readonly ShortcutSettings shortcutSettings = new();
+    private readonly AnnotationStyleSettings annotationStyleSettings = new();
+    private AnnotationStyleProfile annotationStyle = new();
     private ShortcutProfile shortcuts = ShortcutProfile.Default;
     private CaptureHotkey? captureHotkey;
     private SettingsWindow? configuration;
@@ -38,6 +40,7 @@ internal sealed class App : Application
     [STAThread]
     public static void Main(string[] args)
     {
+        System.Runtime.InteropServices.Marshal.ThrowExceptionForHR(Native.SetCurrentProcessExplicitAppUserModelID(Native.ApplicationId));
         var app = new App { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         app.Startup += (_, _) => app.Start(args.Contains("--capture"));
         app.DispatcherUnhandledException += (_, e) =>
@@ -63,9 +66,13 @@ internal sealed class App : Application
         source = new HwndSource(new HwndSourceParameters("Snap Tool Hotkey") { Width = 0, Height = 0, WindowStyle = 0 });
         source.AddHook(WindowMessage);
         bool invalidSettings = false;
+        bool invalidStyleSettings = false;
         try { shortcuts = shortcutSettings.Load(); }
         catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException or ArgumentException or System.Text.Json.JsonException)
         { shortcuts = ShortcutProfile.Default; invalidSettings = true; }
+        try { annotationStyle = annotationStyleSettings.Load(); }
+        catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException or ArgumentException or System.Text.Json.JsonException)
+        { annotationStyle = new(); invalidStyleSettings = true; }
         captureHotkey = new(shortcuts[ShortcutAction.Capture],
             (id, key) => Native.RegisterHotKey(source.Handle, id, (uint)key.Modifiers | 0x4000, (uint)System.Windows.Input.KeyInterop.VirtualKeyFromKey(key.Key)),
             id => { if (source != null) Native.UnregisterHotKey(source.Handle, id); });
@@ -82,8 +89,8 @@ internal sealed class App : Application
         tray.DoubleClick += (_, _) => QueueCapture();
         RegisterHotkey(false);
         sessionNotifications = Native.WTSRegisterSessionNotification(source.Handle, 0);
-        if (invalidSettings) Notify("快捷键配置无法读取", "已临时使用默认快捷键；可在托盘右键“配置”中重新保存，原文件未覆盖。");
-        else if (captureHotkey.Registered) Notify("已准备好", $"按 {shortcuts[ShortcutAction.Capture]} 框选截图；右键托盘图标可配置或退出。");
+        if (invalidSettings) UpdateStatus("快捷键配置无法读取", "已临时使用默认快捷键；可在托盘右键“配置”中重新保存，原文件未覆盖。");
+        else if (invalidStyleSettings) UpdateStatus("样式配置无法读取", "已临时使用默认样式；原文件未覆盖，重新修改样式后保存。");
         if (capture) QueueCapture();
     }
 
@@ -108,7 +115,7 @@ internal sealed class App : Application
         try
         {
             captureHotkey!.Apply(shortcuts[ShortcutAction.Capture], () => { });
-            if (notifySuccess) Notify("快捷键可用", $"{captureHotkey.Current} 已注册。");
+            if (notifySuccess) UpdateStatus("快捷键可用", $"{captureHotkey.Current} 已注册。");
         }
         catch (InvalidOperationException ex)
         { MessageBox.Show(ex.Message + "\n可通过托盘右键“配置”修改，或释放占用后重新注册。也可从托盘菜单截图。", "Snap Tool · 快捷键不可用", MessageBoxButton.OK, MessageBoxImage.Warning); }
@@ -170,12 +177,13 @@ internal sealed class App : Application
                 var snapshot = DesktopSnapshot.Capture();
                 pins.Suspend();
                 session = new CaptureSession(snapshot, () => { session = null; if (scrollCapture == null && recording == null) pins.Resume(); },
-                    (title, text) => Notify(title, text), ocr.Recognize, showTranslation: ShowTranslation,
+                    UpdateStatus, ocr.Recognize, showTranslation: ShowTranslation,
                     showPin: (image, rectangle) => pins.Add(image, rectangle),
                     windowTargets: windowTargets.Select(target => target.Bounds).ToArray(),
                     showScroll: (region, image) => ShowScrollCapture(region, image,
                         windowTargets.FirstOrDefault(w => w.Bounds.Contains(new(region.Left + region.Width / 2, region.Top + region.Height / 2)))),
-                    showRecording: ShowRecording, getShortcuts: () => shortcuts);
+                    showRecording: ShowRecording, getShortcuts: () => shortcuts, initialStyle: annotationStyle,
+                    rememberStyle: next => { annotationStyle = next; annotationStyleSettings.Save(next); });
                 session.Show();
             }
             catch (Exception ex)
@@ -187,13 +195,20 @@ internal sealed class App : Application
         }));
     }
 
-    private void Notify(string title, string text) => tray?.ShowBalloonTip(2000, title, text, Forms.ToolTipIcon.Info);
+    private void UpdateStatus(string title, string text)
+    {
+        if (tray == null) return;
+        string status = title + "\n" + text;
+        int length = Math.Min(status.Length, 63);
+        if (length < status.Length && char.IsHighSurrogate(status[length - 1])) length--;
+        tray.Text = status[..length];
+    }
 
     private bool ShowRecording(PixelRect region)
     {
         if (!sessionNotifications) throw new InvalidOperationException("无法监听锁屏状态，请退出后重新启动再录屏。");
         if (!global::Windows.Graphics.Capture.GraphicsCaptureSession.IsSupported()) throw new InvalidOperationException("当前系统不支持屏幕录制。");
-        var window = new RecordingWindow(region, Notify, getShortcuts: () => shortcuts); recording = window;
+        var window = new RecordingWindow(region, UpdateStatus, getShortcuts: () => shortcuts); recording = window;
         window.Closed += (_, _) => { if (recording == window) recording = null; if (session == null) pins.Resume(); };
         try { window.Start(); return true; }
         catch { window.Close(); throw; }
@@ -216,7 +231,7 @@ internal sealed class App : Application
             {
                 await ImageOutput.Copy(image, token);
                 token.ThrowIfCancellationRequested();
-                Notify("长截图已复制", warning.Length == 0 ? "可直接粘贴到其他应用。" : "已复制成功拼接的部分。" + warning);
+                UpdateStatus("长截图已复制", warning.Length == 0 ? "可直接粘贴到其他应用。" : "已复制成功拼接的部分。" + warning);
             },
             canCapture: () => scrollCapture != null && WindowTargets.CanCaptureRegion(target, region, scrollCapture.CaptureWindows), getShortcuts: () => shortcuts);
         scrollCapture = window;

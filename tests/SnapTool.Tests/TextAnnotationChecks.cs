@@ -249,6 +249,10 @@ internal static class TextAnnotationChecks
             string dir = Path.Combine(Program.FindRoot(), ".tmp", "text-annotation"); Directory.CreateDirectory(dir);
             ImageOutput.SavePng(image, Path.Combine(dir, "preview.png"));
             ImageOutput.SavePng(session.CreateOutput(), Path.Combine(dir, "export.png"));
+            Assert(session.TryEditText(window, new(100, 90), 2, true));
+            window.TextEditorBox!.Select(0, 0); window.Refresh(); content.UpdateLayout();
+            var editorPreview = new RenderTargetBitmap(800, 500, 96, 96, PixelFormats.Pbgra32); editorPreview.Render(content);
+            ImageOutput.SavePng(editorPreview, Path.Combine(dir, "editor-preview.png"));
         }
         finally { window.Close(); session.Close(); }
     }

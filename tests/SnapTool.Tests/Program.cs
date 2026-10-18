@@ -149,6 +149,7 @@ internal static class Program
         ArrowAnnotationChecks.Run(Test);
         NumberAnnotationChecks.Run(Test);
         TextAnnotationChecks.Run(Test);
+        AnnotationStyleSettingsChecks.Run(Test);
         MosaicChecks.Run(Test);
         RecordingChecks.Run(Test);
         PinChecks.Run(Test);

@@ -8,6 +8,9 @@ namespace SnapTool;
 
 internal static class Native
 {
+    internal const string ApplicationId = "SnailMai.SnapTool";
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    internal static extern int SetCurrentProcessExplicitAppUserModelID(string appId);
     [DllImport("wtsapi32.dll")] [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool WTSRegisterSessionNotification(IntPtr window, uint flags);
     [DllImport("wtsapi32.dll")] [return: MarshalAs(UnmanagedType.Bool)]

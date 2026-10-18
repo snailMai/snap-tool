@@ -15,12 +15,13 @@ internal sealed class CaptureSession(DesktopSnapshot snapshot, Action finished, 
     Func<string, CancellationToken, Task>? copyText = null, Action<string>? showTranslation = null,
     Action<BitmapSource, PixelRect>? showPin = null, Func<BitmapSource, CancellationToken, Task>? copyImage = null,
     IReadOnlyList<PixelRect>? windowTargets = null, Action<PixelRect, BitmapSource>? showScroll = null,
-    Func<PixelRect, bool>? showRecording = null, Func<ShortcutProfile>? getShortcuts = null)
+    Func<PixelRect, bool>? showRecording = null, Func<ShortcutProfile>? getShortcuts = null,
+    AnnotationStyleProfile? initialStyle = null, Action<AnnotationStyleProfile>? rememberStyle = null)
 {
     internal DesktopSnapshot Snapshot { get; } = snapshot;
     internal ShortcutProfile Shortcuts => getShortcuts?.Invoke() ?? ShortcutProfile.Default;
     internal SelectionModel Selection { get; } = new(snapshot.Bounds);
-    internal Annotations Annotations { get; } = new();
+    internal Annotations Annotations { get; } = (initialStyle ?? new()).CreateAnnotations();
     internal MosaicRenderer Mosaic { get; } = new(snapshot);
     internal AnnotationKind? Tool { get; private set; }
     internal bool Annotating => Tool != null;
@@ -33,6 +34,7 @@ internal sealed class CaptureSession(DesktopSnapshot snapshot, Action finished, 
     internal bool Recognizing { get; private set; }
     internal OverlayWindow? TextEditor { get; private set; }
     internal string Status { get; private set; } = "";
+    private const string StyleSaveFailure = "样式已应用，但未能保存到本机；请检查配置目录权限后重新修改样式。";
     private CancellationTokenSource? outputCancellation;
     private readonly List<OverlayWindow> windows = [];
     private bool closed;
@@ -162,7 +164,7 @@ internal sealed class CaptureSession(DesktopSnapshot snapshot, Action finished, 
     internal void SetAnnotationStyle(uint rgb, int thickness)
     {
         if (Busy || closed || Dragging) return;
-        Annotations.SetStyle(rgb, thickness, Tool ?? AnnotationKind.Rectangle); Refresh();
+        Annotations.SetStyle(rgb, thickness, Tool ?? AnnotationKind.Rectangle); RememberStyle(); Refresh();
     }
 
     internal bool TryEditText(OverlayWindow window, PixelPoint point, int tolerance, bool editExisting = false)
@@ -186,7 +188,14 @@ internal sealed class CaptureSession(DesktopSnapshot snapshot, Action finished, 
     {
         if (Busy || closed || Dragging) return;
         var text = Annotations.Selected is { Kind: AnnotationKind.Text } mark ? mark.Text : "";
-        Annotations.SetTextStyle(style, TextAnnotationRenderer.Measure(text, style)); Refresh();
+        Annotations.SetTextStyle(style, TextAnnotationRenderer.Measure(text, style)); RememberStyle(); Refresh();
+    }
+
+    private void RememberStyle()
+    {
+        if (rememberStyle == null) return;
+        try { rememberStyle(AnnotationStyleProfile.From(Annotations)); if (Status == StyleSaveFailure) Status = ""; }
+        catch { Status = StyleSaveFailure; }
     }
 
     internal void FinishTextEditing(bool cancel = false)

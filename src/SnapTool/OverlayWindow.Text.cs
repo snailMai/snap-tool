@@ -27,7 +27,7 @@ internal sealed partial class OverlayWindow
             TextWrapping = TextWrapping.NoWrap, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto, MinWidth = 100, MinHeight = 38,
             Padding = new Thickness(2), BorderBrush = Brushes.DodgerBlue, BorderThickness = new Thickness(1),
-            Background = Brushes.White, ToolTip = "Enter 换行，Ctrl+Enter 完成文字编辑，Esc 放弃本次编辑；点击其他位置完成。"
+            Background = Brushes.Transparent, ToolTip = "Enter 换行，Ctrl+Enter 完成文字编辑，Esc 放弃本次编辑；点击其他位置完成。"
         };
         System.Windows.Automation.AutomationProperties.SetName(textEditor, "文字输入");
         textEditor.TextChanged += (_, _) => { if (textEditor != null) session.UpdateText(textEditor.Text); };

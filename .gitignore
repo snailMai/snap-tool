@@ -3,6 +3,7 @@
 dist/
 models/v5/
 translation.json
+annotation-style.json
 **/bin/
 **/obj/
 .vs/
