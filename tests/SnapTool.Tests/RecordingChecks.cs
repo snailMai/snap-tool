@@ -180,6 +180,16 @@ internal static class RecordingChecks
                     while (recorder.Frames < 5 && timeout.Elapsed < TimeSpan.FromSeconds(12)) await Task.Delay(50);
                     Assert(recorder.Frames >= 5);
                     fixture.Background = System.Windows.Media.Brushes.Lime;
+                    // The capture adapter reuses its destination, but previously returned frames remain independent.
+                    await Task.Delay(100);
+                    using (var changed = await capture.Read(CancellationToken.None))
+                    {
+                        byte[] changedPixels = new byte[160 * 90 * 4]; changed.CopyToBuffer(changedPixels.AsBuffer());
+                        Assert(changedPixels[1] > changedPixels[2] + 100);
+                        frame.CopyToBuffer(pixels.AsBuffer()); Assert(pixels[2] > pixels[1] + 100);
+                        using var repeated = await capture.Read(CancellationToken.None);
+                        repeated.CopyToBuffer(changedPixels.AsBuffer()); Assert(changedPixels[1] > changedPixels[2] + 100);
+                    }
                     while (recorder.Frames < 15 && timeout.Elapsed < TimeSpan.FromSeconds(15)) await Task.Delay(50);
                     Assert(recorder.Frames >= 15);
                     foreach (var modifiers in new[] { ModifierKeys.None, ModifierKeys.Shift, ModifierKeys.Control | ModifierKeys.Shift })

@@ -11,12 +11,18 @@ public sealed class ScrollFrame
     internal readonly byte[] data;
     internal readonly ulong[] rows;
 
-    public ScrollFrame(int width, int height, byte[] pixels)
+    public ScrollFrame(int width, int height, byte[] pixels) : this(width, height, pixels, false) { }
+
+    // Caller transfers exclusive ownership; recycle only after all readers and retained chunks release the frame.
+    internal static ScrollFrame FromOwnedPixels(int width, int height, byte[] pixels) => new(width, height, pixels, true);
+
+    private ScrollFrame(int width, int height, byte[] pixels, bool ownsPixels)
     {
+        ArgumentNullException.ThrowIfNull(pixels);
         if (width < 32 || height < 64 || (long)width * height > ScrollStitcher.MaxPixels ||
             pixels.LongLength != (long)width * height * 4)
             throw new ArgumentException("Invalid scroll frame dimensions.");
-        Width = width; Height = height; data = (byte[])pixels.Clone(); rows = new ulong[height];
+        Width = width; Height = height; data = ownsPixels ? pixels : (byte[])pixels.Clone(); rows = new ulong[height];
         for (int y = 0; y < height; y++)
         {
             ulong hash = 14695981039346656037;
@@ -79,6 +85,9 @@ public sealed class ScrollStitcher
         last = first; Height = first.Height; chunks.Add(first.data);
     }
 
+    // Only the current reference frame and the initial chunk retain entire frame arrays.
+    internal bool RetainsFrame(ScrollFrame frame) => ReferenceEquals(last, frame) || ReferenceEquals(chunks[0], frame.data);
+
     public ScrollAppendResult Append(ScrollFrame next, CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();
@@ -113,13 +122,20 @@ public sealed class ScrollStitcher
     public byte[] Compose(CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();
-        var pixels = new byte[checked(Width * Height * 4)]; int offset = 0;
+        var pixels = new byte[checked(Width * Height * 4)];
+        CopyChunks((row, chunk) => Buffer.BlockCopy(chunk, 0, pixels, row * Width * 4, chunk.Length), token);
+        return pixels;
+    }
+
+    internal void CopyChunks(Action<int, byte[]> write, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        int row = 0;
         foreach (var chunk in chunks)
         {
             token.ThrowIfCancellationRequested();
-            Buffer.BlockCopy(chunk, 0, pixels, offset, chunk.Length); offset += chunk.Length;
+            write(row, chunk); row += chunk.Length / (Width * 4);
         }
-        return pixels;
     }
 
     public (int Width, int Height, byte[] Pixels) Preview(int maxWidth, int maxHeight, CancellationToken token = default)

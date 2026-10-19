@@ -1,9 +1,6 @@
 using System;
 using System.Collections.Generic;
-using System.Drawing;
-using System.Drawing.Imaging;
 using System.Windows;
-using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using SnapTool.Core;
 
@@ -37,36 +34,19 @@ internal sealed class DesktopSnapshot
     {
         if ((long)bounds.Width * bounds.Height > 128_000_000)
             throw new InvalidOperationException("显示区域过大，无法安全分配截图内存。");
-        using var bitmap = new Bitmap(bounds.Width, bounds.Height, System.Drawing.Imaging.PixelFormat.Format32bppRgb);
-        using (var graphics = Graphics.FromImage(bitmap))
+        return MappedCaptureBitmap.Create(bounds.Width, bounds.Height, targetDc =>
         {
-            graphics.Clear(System.Drawing.Color.Black);
             var screenDc = Native.GetDC(IntPtr.Zero);
             if (screenDc == IntPtr.Zero) throw new System.ComponentModel.Win32Exception();
             try
             {
-                var targetDc = graphics.GetHdc();
-                try
-                {
-                    foreach (var screen in monitors)
-                        if (!Native.BitBlt(targetDc, screen.Left - bounds.Left, screen.Top - bounds.Top, screen.Width, screen.Height,
-                            screenDc, screen.Left, screen.Top, 0x00CC0020 | 0x40000000))
-                            throw new System.ComponentModel.Win32Exception();
-                }
-                finally { graphics.ReleaseHdc(targetDc); }
+                foreach (var screen in monitors)
+                    if (!Native.BitBlt(targetDc, screen.Left - bounds.Left, screen.Top - bounds.Top, screen.Width, screen.Height,
+                        screenDc, screen.Left, screen.Top, 0x00CC0020 | 0x40000000))
+                        throw new System.ComponentModel.Win32Exception();
             }
             finally { Native.ReleaseDC(IntPtr.Zero, screenDc); }
-        }
-        var data = bitmap.LockBits(new Rectangle(0, 0, bounds.Width, bounds.Height), ImageLockMode.ReadOnly,
-            System.Drawing.Imaging.PixelFormat.Format32bppRgb);
-        try
-        {
-            var image = BitmapSource.Create(bounds.Width, bounds.Height, 96, 96, PixelFormats.Bgr32, null,
-                data.Scan0, checked(data.Stride * data.Height), data.Stride);
-            image.Freeze();
-            return image;
-        }
-        finally { bitmap.UnlockBits(data); }
+        });
     }
 
     internal BitmapSource Crop(PixelRect rectangle)

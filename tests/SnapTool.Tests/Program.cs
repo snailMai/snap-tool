@@ -15,6 +15,9 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        if (args.Contains("--optimization-benchmark")) { OptimizationBenchmarks.Run(args[Array.IndexOf(args, "--optimization-benchmark") + 1]); return 0; }
+        if (args.Contains("--memory-benchmark")) { MemoryBenchmarks.Run(args[Array.IndexOf(args, "--memory-benchmark") + 1]); return 0; }
+        if (args.Contains("--memory-checks")) { MemoryChecks.Run(Test); return failed == 0 ? 0 : 1; }
         if (args.Contains("--translation-window-checks")) { Test("native translation auto close", TranslationWindowChecks.Run); return failed == 0 ? 0 : 1; }
         if (args.Contains("--mosaic-checks")) { MosaicChecks.Run(Test); return failed == 0 ? 0 : 1; }
         if (args.Contains("--mosaic-preview")) { MosaicChecks.RenderPreview(); return 0; }
@@ -149,6 +152,7 @@ internal static class Program
         ArrowAnnotationChecks.Run(Test);
         NumberAnnotationChecks.Run(Test);
         TextAnnotationChecks.Run(Test);
+        MemoryChecks.Run(Test);
         AnnotationStyleSettingsChecks.Run(Test);
         MosaicChecks.Run(Test);
         RecordingChecks.Run(Test);

@@ -21,7 +21,8 @@ internal sealed class RecordingCapture : IDisposable
     private readonly GraphicsCaptureSession session;
     private readonly BitmapBounds crop;
     private readonly RecordingSize size;
-    private SoftwareBitmap? latest;
+    private VideoFrame? destination;
+    private bool hasFrame;
     private volatile bool unavailable;
 
     internal RecordingCapture(PixelRect region, PixelRect screen, RecordingSize size, IntPtr testWindow = default)
@@ -68,13 +69,13 @@ internal sealed class RecordingCapture : IDisposable
                     if (frame.ContentSize.Width != item.Size.Width || frame.ContentSize.Height != item.Size.Height)
                         throw new InvalidOperationException("录制目标大小已改变。");
                     using var source = VideoFrame.CreateWithDirect3D11Surface(frame.Surface);
-                    using var destination = new VideoFrame(BitmapPixelFormat.Bgra8, size.Width, size.Height, BitmapAlphaMode.Ignore);
+                    destination ??= new VideoFrame(BitmapPixelFormat.Bgra8, size.Width, size.Height, BitmapAlphaMode.Ignore);
                     await source.CopyToAsync(destination, crop, new BitmapBounds { Width = (uint)size.Width, Height = (uint)size.Height }).AsTask(token).ConfigureAwait(false);
-                    latest?.Dispose(); latest = SoftwareBitmap.Copy(destination.SoftwareBitmap);
+                    hasFrame = true;
                 }
                 finally { frame.Dispose(); }
             }
-            if (latest != null) return SoftwareBitmap.Copy(latest);
+            if (hasFrame) return SoftwareBitmap.Copy(destination!.SoftwareBitmap);
             if (timeout.Elapsed > TimeSpan.FromSeconds(5)) throw new TimeoutException("未收到录屏画面，请检查目标是否可见。");
             await Task.Delay(10, token).ConfigureAwait(false);
         }
@@ -82,7 +83,7 @@ internal sealed class RecordingCapture : IDisposable
 
     public void Dispose()
     {
-        item.Closed -= OnClosed; session.Dispose(); pool.Dispose(); latest?.Dispose(); latest = null; device.Dispose();
+        item.Closed -= OnClosed; session.Dispose(); pool.Dispose(); destination?.Dispose(); destination = null; hasFrame = false; device.Dispose();
     }
 }
 

@@ -35,26 +35,29 @@ internal sealed class MosaicRenderer(DesktopSnapshot snapshot)
         if (blockSize < 1) throw new ArgumentOutOfRangeException(nameof(blockSize));
         var source = new FormatConvertedBitmap(snapshot.Crop(region), PixelFormats.Pbgra32, null, 0);
         int stride = checked(region.Width * 4);
-        byte[] input = new byte[checked(stride * region.Height)]; source.CopyPixels(input, stride, 0);
+        byte[] input = new byte[checked(stride * Math.Min(blockSize, region.Height))];
         int columns = (region.Width + blockSize - 1) / blockSize;
         int rows = (region.Height + blockSize - 1) / blockSize;
         byte[] blocks = new byte[checked(columns * rows * 4)];
         for (int row = 0; row < rows; row++)
+        {
+            int top = row * blockSize, bottom = Math.Min(top + blockSize, region.Height);
+            source.CopyPixels(new Int32Rect(0, top, region.Width, bottom - top), input, stride, 0);
             for (int column = 0; column < columns; column++)
             {
-                int left = column * blockSize, top = row * blockSize;
-                int right = Math.Min(left + blockSize, region.Width), bottom = Math.Min(top + blockSize, region.Height);
+                int left = column * blockSize, right = Math.Min(left + blockSize, region.Width);
                 long b = 0, g = 0, r = 0, a = 0;
                 for (int y = top; y < bottom; y++)
                     for (int x = left; x < right; x++)
                     {
-                        int pixel = y * stride + x * 4;
+                        int pixel = (y - top) * stride + x * 4;
                         b += input[pixel]; g += input[pixel + 1]; r += input[pixel + 2]; a += input[pixel + 3];
                     }
                 int count = (right - left) * (bottom - top), index = (row * columns + column) * 4;
                 blocks[index] = (byte)(b / count); blocks[index + 1] = (byte)(g / count);
                 blocks[index + 2] = (byte)(r / count); blocks[index + 3] = (byte)(a / count);
             }
+        }
         var image = BitmapSource.Create(columns, rows, 96, 96, PixelFormats.Pbgra32, null, blocks, columns * 4);
         image.Freeze();
         var group = new DrawingGroup { ClipGeometry = new RectangleGeometry(new Rect(region.Left, region.Top, region.Width, region.Height)) };

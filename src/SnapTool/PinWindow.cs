@@ -1,4 +1,5 @@
 using System;
+using System.IO.MemoryMappedFiles;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -111,10 +112,24 @@ internal sealed class PinWindow : Window
 
     internal static BitmapSource Detach(BitmapSource image)
     {
-        var converted = new FormatConvertedBitmap(image, PixelFormats.Pbgra32, null, 0);
+        ArgumentNullException.ThrowIfNull(image);
+        BitmapSource converted = image.Format == PixelFormats.Pbgra32 ? image : new FormatConvertedBitmap(image, PixelFormats.Pbgra32, null, 0);
         int stride = checked(image.PixelWidth * 4);
-        var pixels = new byte[checked(stride * image.PixelHeight)]; converted.CopyPixels(pixels, stride, 0);
-        var independent = BitmapSource.Create(image.PixelWidth, image.PixelHeight, 96, 96, PixelFormats.Pbgra32, null, pixels, stride);
+        using var section = MemoryMappedFile.CreateNew(null, checked(stride * image.PixelHeight));
+        int rows = Math.Min(image.PixelHeight, Math.Max(1, 65536 / stride));
+        var pixels = new byte[checked(stride * rows)];
+        using (var view = section.CreateViewAccessor())
+        {
+            for (int y = 0; y < image.PixelHeight; y += rows)
+            {
+                int height = Math.Min(rows, image.PixelHeight - y);
+                converted.CopyPixels(new Int32Rect(0, y, image.PixelWidth, height), pixels, stride, 0);
+                view.WriteArray((long)y * stride, pixels, 0, height * stride);
+            }
+        }
+        // Only the independent section remains; WIC owns its read-only view after this handle closes.
+        var independent = Imaging.CreateBitmapSourceFromMemorySection(section.SafeMemoryMappedFileHandle.DangerousGetHandle(),
+            image.PixelWidth, image.PixelHeight, PixelFormats.Pbgra32, stride, 0);
         independent.Freeze(); return independent;
     }
 

@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
@@ -10,12 +11,26 @@ using SkiaSharp;
 namespace SnapTool;
 
 // One CPU engine per application. Serialize runs, including runs from cancelled sessions.
-internal sealed class OcrService(string? modelDirectory = null) : IDisposable
+internal sealed class OcrService : IDisposable
 {
-    private readonly string directory = modelDirectory ?? Path.Combine(AppContext.BaseDirectory, "models", "v5");
+    private readonly string directory;
     private readonly SemaphoreSlim gate = new(1, 1);
+    private readonly Timer idleTimer;
+    private readonly TimeSpan idleTimeout;
+    private long lastUsed;
     private RapidOcr? engine;
     private int disposed;
+
+    internal OcrService(string? modelDirectory = null, TimeSpan? idleTimeout = null)
+    {
+        directory = modelDirectory ?? Path.Combine(AppContext.BaseDirectory, "models", "v5");
+        this.idleTimeout = idleTimeout ?? TimeSpan.FromMinutes(5);
+        if (this.idleTimeout < TimeSpan.FromMilliseconds(1) || this.idleTimeout.TotalMilliseconds > uint.MaxValue - 1)
+            throw new ArgumentOutOfRangeException(nameof(idleTimeout));
+        idleTimer = new Timer(ReleaseIdleEngine, null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+    }
+
+    internal bool IsLoaded => Volatile.Read(ref engine) != null;
 
     internal Task<string> Recognize(BitmapSource image, CancellationToken token)
     {
@@ -27,6 +42,7 @@ internal sealed class OcrService(string? modelDirectory = null) : IDisposable
             {
                 ObjectDisposedException.ThrowIf(Volatile.Read(ref disposed) != 0, this);
                 token.ThrowIfCancellationRequested();
+                idleTimer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
                 EnsureEngine();
                 token.ThrowIfCancellationRequested();
                 var converted = new FormatConvertedBitmap(image, PixelFormats.Bgr32, null, 0);
@@ -37,8 +53,33 @@ internal sealed class OcrService(string? modelDirectory = null) : IDisposable
                 token.ThrowIfCancellationRequested();
                 return result.StrRes.TrimEnd('\r', '\n');
             }
-            finally { gate.Release(); }
+            finally
+            {
+                if (Volatile.Read(ref disposed) == 0 && engine != null)
+                {
+                    lastUsed = Stopwatch.GetTimestamp();
+                    idleTimer.Change(idleTimeout, Timeout.InfiniteTimeSpan);
+                }
+                gate.Release();
+            }
         }, token);
+    }
+
+    private void ReleaseIdleEngine(object? state)
+    {
+        if (!gate.Wait(0)) return;
+        try
+        {
+            if (Volatile.Read(ref disposed) != 0 || engine == null) return;
+            var remaining = idleTimeout - Stopwatch.GetElapsedTime(lastUsed);
+            if (remaining > TimeSpan.Zero)
+            {
+                idleTimer.Change(TimeSpan.FromMilliseconds(Math.Max(1, Math.Ceiling(remaining.TotalMilliseconds))), Timeout.InfiniteTimeSpan);
+                return;
+            }
+            engine.Dispose(); engine = null;
+        }
+        finally { gate.Release(); }
     }
 
     private void EnsureEngine()
@@ -55,7 +96,10 @@ internal sealed class OcrService(string? modelDirectory = null) : IDisposable
         var candidate = new RapidOcr();
         try
         {
-            candidate.InitModels(det, cls, rec, dict, numThread: Math.Min(4, Environment.ProcessorCount));
+            using var options = RapidOcr.GetDefaultSessionOptions(Math.Min(4, Environment.ProcessorCount));
+            // Desktop-sized inputs vary; retaining the CPU arena keeps the largest run's buffers resident.
+            options.EnableCpuMemArena = false;
+            candidate.InitModels(det, cls, rec, dict, options);
             engine = candidate;
         }
         catch { candidate.Dispose(); throw; }
@@ -65,7 +109,7 @@ internal sealed class OcrService(string? modelDirectory = null) : IDisposable
     {
         if (Interlocked.Exchange(ref disposed, 1) != 0) return;
         gate.Wait();
-        try { engine?.Dispose(); engine = null; }
+        try { idleTimer.Dispose(); engine?.Dispose(); engine = null; }
         finally { gate.Release(); }
     }
 }

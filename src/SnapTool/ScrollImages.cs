@@ -1,4 +1,6 @@
+using System.IO.MemoryMappedFiles;
 using System.Threading;
+using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using SnapTool.Core;
@@ -14,18 +16,29 @@ internal static class ScrollImages
         image.Freeze(); return image;
     }
 
-    internal static ScrollFrame Frame(BitmapSource image)
+    internal static ScrollFrame Frame(BitmapSource image, byte[]? reusable = null)
     {
-        var converted = new FormatConvertedBitmap(image, PixelFormats.Bgr32, null, 0);
-        var pixels = new byte[checked(image.PixelWidth * image.PixelHeight * 4)];
+        BitmapSource converted = image.Format == PixelFormats.Bgr32 ? image : new FormatConvertedBitmap(image, PixelFormats.Bgr32, null, 0);
+        int length = checked(image.PixelWidth * image.PixelHeight * 4);
+        var pixels = reusable?.Length == length ? reusable : new byte[length];
         converted.CopyPixels(pixels, image.PixelWidth * 4, 0);
-        return new(image.PixelWidth, image.PixelHeight, pixels);
+        return ScrollFrame.FromOwnedPixels(image.PixelWidth, image.PixelHeight, pixels);
     }
 
     internal static BitmapSource Compose(ScrollStitcher stitcher, CancellationToken token)
     {
-        var pixels = stitcher.Compose(token);
-        var image = BitmapSource.Create(stitcher.Width, stitcher.Height, 96, 96, PixelFormats.Bgr32, null, pixels, stitcher.Width * 4);
+        token.ThrowIfCancellationRequested();
+        int stride = checked(stitcher.Width * 4);
+        using var section = MemoryMappedFile.CreateNew(null, checked((long)stride * stitcher.Height));
+        using (var view = section.CreateViewAccessor())
+        {
+            stitcher.CopyChunks((row, pixels) => view.WriteArray((long)row * stride, pixels, 0, pixels.Length), token);
+        }
+        token.ThrowIfCancellationRequested();
+        // WIC owns its read-only mapped view. The section handle can close after creation;
+        // no writer survives, no image file is created, and there is no double bitmap buffer.
+        var image = Imaging.CreateBitmapSourceFromMemorySection(section.SafeMemoryMappedFileHandle.DangerousGetHandle(),
+            stitcher.Width, stitcher.Height, PixelFormats.Bgr32, stride, 0);
         image.Freeze(); return image;
     }
 }

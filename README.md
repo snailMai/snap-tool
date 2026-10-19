@@ -26,6 +26,10 @@ Windows x64 桌面区域截图工具。使用 C#、WPF 与 Windows 原生 API，
 
 Shift+C 仅在截图窗口内生效。OCR 在本机执行，不上传截图、不保存识别历史。识别过程中显示状态并禁用重复操作；无文字或失败时保留选区和原剪贴板，取消后不会输出迟到结果。结果保留识别出的换行，但不保证还原表格、多栏排版或代码缩进；小字、模糊文字可能识别不准。
 
+OCR 模型首次使用时加载，连续 5 分钟未使用 OCR 后自动释放；识别任务运行期间不会卸载。之后再次 OCR 或截图翻译会重新加载，首次识别可能稍慢，模型和识别参数保持不变。应用不主动强制垃圾回收或裁剪进程工作集。
+
+OCR 关闭 CPU 内存池以减少识别后保留的推理缓冲，保留内存复用模式；模型、识别尺寸和识别结果规则不变，连续识别速度与内存的取舍以当前机器实测为准。
+
 ## 自动识别窗口
 
 - 开始截图后，选框随鼠标匹配指向的可见顶层窗口；窗口重叠时优先匹配鼠标位置最上层的窗口。识别的是整个窗口，不细分按钮或面板。
@@ -201,6 +205,33 @@ powershell -ExecutionPolicy Bypass -File scripts/build.ps1 -DesktopChecks
 ```
 
 仓库提供源码、测试、依赖锁文件、构建脚本及模型校验清单，不包含 SDK、模型缓存和运行包。构建脚本优先使用 `.tools/dotnet/dotnet.exe`，再使用 PATH 中的 SDK。首次构建需要从 NuGet 获取依赖和运行时包；模型通过上述脚本下载，构建前校验四个模型文件的 SHA256。交付目录为 `dist/SnapTool/`；运行时无需另装 .NET 或 OCR 软件，但须保留目录内的 DLL、`models/` 和 `licenses/`。模型加载路径以程序目录为准，不依赖启动时的工作目录。
+
+可使用构建好的测试程序单独验证内存生命周期，或用合成场景测量分配、进程内存及耗时：
+
+```powershell
+.tools/dotnet/dotnet.exe run --project tests/SnapTool.Tests/SnapTool.Tests.csproj -c Release --no-build -- --memory-checks
+# 场景可选 frame、compose、mosaic、captures、ocr；每次运行使用独立测试进程
+.tools/dotnet/dotnet.exe run --project tests/SnapTool.Tests/SnapTool.Tests.csproj -c Release --no-build -- --memory-benchmark mosaic
+```
+
+内存检查和基准只使用合成图像，不操作真实剪贴板。OCR 基准将闲置阈值缩短为 1 秒，等待 3 秒观察释放；正式运行仍为 5 分钟。基准为统一起点主动执行 GC，应用代码不这样做；输出分别记录托管分配、工作集、私有内存及进程峰值，不能将分配减少直接解释为进程峰值下降。输出像素摘要用于前后核对，不包含用户画面。
+
+进一步对照 OCR 会话配置、截图缓冲及长截图采样，可在独立进程运行以下入口：
+
+```powershell
+# OCR 可选 ocr-default、ocr-no-arena、ocr-no-pattern、ocr-no-both；每项连续识别 3 次
+.tools/dotnet/dotnet.exe run --project tests/SnapTool.Tests/SnapTool.Tests.csproj -c Release --no-build -- --optimization-benchmark ocr-no-arena
+# 截图可选 capture-legacy、capture-mapped，以及各自的 -dual 后缀；包含一次完整像素读取
+.tools/dotnet/dotnet.exe run --project tests/SnapTool.Tests/SnapTool.Tests.csproj -c Release --no-build -- --optimization-benchmark capture-mapped-dual
+# 长截图预热后采样 20 次；只复用合成图片，不捕获桌面
+.tools/dotnet/dotnet.exe run --project tests/SnapTool.Tests/SnapTool.Tests.csproj -c Release --no-build -- --optimization-benchmark scroll-samples
+# 创建独立的合成 4K 贴图并完整读取像素，记录分配、峰值、耗时和像素摘要
+.tools/dotnet/dotnet.exe run --project tests/SnapTool.Tests/SnapTool.Tests.csproj -c Release --no-build -- --optimization-benchmark pin-detach
+# 需要交互桌面：只捕获自动创建的红绿测试窗口，读取 60 帧，不写入真实剪贴板
+.tools/dotnet/dotnet.exe run --project tests/SnapTool.Tests/SnapTool.Tests.csproj -c Release --no-build -- --optimization-benchmark recording-frames
+```
+
+截图对照中的 legacy 仅为测试内保留的旧捕获缓冲流程。长截图允许复用已退出候选状态且未被拼接器引用的像素数组，初始分段和当前参考帧不复用；GIF 复用原生目标帧，交给编码器的位图仍为独立副本，避免后续采集覆盖历史帧。贴图创建分行复制到独立匿名内存节，保留原始像素和透明度，减少临时托管分配；最终图片仍占用完整像素内存，创建速度与内存的取舍以实测为准。上述基准不等同于真实多屏截图、长时间录屏或实际用户负载验收。
 
 自动回归使用合成像素和任务临时文件；不读取真实剪贴板、不捕获桌面。界面测试窗口入口：
 

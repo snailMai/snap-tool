@@ -28,6 +28,7 @@ internal sealed class ScrollCaptureWindow : Window
     private readonly Button finish;
     private ScrollStitcher? stitcher;
     private ScrollFrame? candidate;
+    private byte[]? sparePixels;
     private Task sampling = Task.CompletedTask;
     private bool processing, finishing, closed, limitReached;
     private string problem = "";
@@ -63,7 +64,7 @@ internal sealed class ScrollCaptureWindow : Window
         PreviewKeyDown += OnKey;
         preview.PreviewKeyDown += OnKey;
         preview.Closed += (_, _) => { if (!closed) Close(); };
-        Closed += (_, _) => { closed = true; timer.Stop(); lifetime.Cancel(); lifetime.Dispose(); stitcher = null; candidate = null;
+        Closed += (_, _) => { closed = true; timer.Stop(); lifetime.Cancel(); lifetime.Dispose(); stitcher = null; candidate = null; sparePixels = null;
             regionWindow?.Close(); preview.Close(); };
     }
 
@@ -113,16 +114,19 @@ internal sealed class ScrollCaptureWindow : Window
                 status.Text = problem; preview.Surface.SetMatched(false); return;
             }
             var image = capture(); var previous = candidate; var current = stitcher; var token = lifetime.Token;
+            var reusable = sparePixels; sparePixels = null;
             var result = await Task.Run(() =>
             {
                 token.ThrowIfCancellationRequested();
-                var frame = ScrollImages.Frame(image);
+                var frame = ScrollImages.Frame(image, reusable);
                 bool stable = previous != null && previous.SimilarTo(frame, token);
                 var appended = stable ? current.Append(frame, token) : ScrollAppendResult.Unchanged;
                 return (Frame: frame, Stable: stable, Result: appended,
                     Preview: appended == ScrollAppendResult.Added ? ScrollImages.Preview(current, token) : null);
             }, token);
             if (closed) return;
+            // Sampling has finished reading previous. Never recycle the stitcher's reference or initial chunk.
+            if (previous != null && !current.RetainsFrame(previous)) sparePixels = previous.data;
             candidate = result.Frame;
             if (!result.Stable) problem = "页面尚未稳定，末段暂未拼接。请停顿片刻。";
             else if (result.Result == ScrollAppendResult.NoMatch)
