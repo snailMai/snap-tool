@@ -23,6 +23,7 @@ internal static class TranslationChecks
 
     internal static void Run(Action<string, Action> test)
     {
+        ClipboardTranslationChecks.Run(test);
         void Check(string name, Func<Task> action) => test(name, () => OcrChecks.Pump(action));
         test("Youdao v3 fixed SHA256 vector", () => Assert(YoudaoTranslator.Sign("hello", Fake, "0123", "456789") ==
             "b3ae8f08adee5614a1d8f685378a5f03d7d51e0d8c8de102a97547e16953a898"));

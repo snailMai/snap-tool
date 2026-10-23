@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
+using System.Windows.Input;
 using SnapTool.Core;
 
 namespace SnapTool;
@@ -22,6 +23,45 @@ internal static class Native
     internal static extern bool RegisterHotKey(IntPtr window, int id, uint modifiers, uint key);
     [DllImport("user32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool UnregisterHotKey(IntPtr window, int id);
+    [DllImport("user32.dll")] internal static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] internal static extern uint GetClipboardSequenceNumber();
+    [DllImport("user32.dll")] private static extern IntPtr GetClipboardOwner();
+    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+    [DllImport("user32.dll")] private static extern short GetAsyncKeyState(int key);
+    [DllImport("user32.dll", SetLastError = true)] private static extern uint SendInput(uint count, Input[] inputs, int size);
+    [StructLayout(LayoutKind.Sequential)] internal struct KeyboardInput
+    { public ushort Key, Scan; public uint Flags, Time; public UIntPtr Extra; }
+    [StructLayout(LayoutKind.Sequential)] internal struct MouseInput
+    { public int X, Y; public uint Data, Flags, Time; public UIntPtr Extra; }
+    [StructLayout(LayoutKind.Explicit)] internal struct InputData
+    { [FieldOffset(0)] public KeyboardInput Keyboard; [FieldOffset(0)] public MouseInput Mouse; }
+    [StructLayout(LayoutKind.Sequential)] internal struct Input
+    { public uint Type; public InputData Data; }
+
+    internal static bool CopyKeysPressed(ShortcutGesture shortcut)
+    {
+        foreach (int key in new[] { 0x10, 0x11, 0x12, 0x5B, 0x5C, 0x43, KeyInterop.VirtualKeyFromKey(shortcut.Key) })
+            if ((GetAsyncKeyState(key) & 0x8000) != 0) return true;
+        return false;
+    }
+
+    internal static bool OwnsClipboard(IntPtr target)
+    {
+        _ = GetWindowThreadProcessId(target, out uint targetProcess);
+        _ = GetWindowThreadProcessId(GetClipboardOwner(), out uint clipboardProcess);
+        return targetProcess != 0 && targetProcess == clipboardProcess;
+    }
+
+    internal static bool SendCopy(Func<Input[], uint>? send = null)
+    {
+        send ??= inputs => SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<Input>());
+        Input KeyInput(ushort key, bool up) => new() { Type = 1, Data = new() { Keyboard = new() { Key = key, Flags = up ? 2u : 0u } } };
+        uint sent = send([KeyInput(0x11, false), KeyInput(0x43, false), KeyInput(0x43, true), KeyInput(0x11, true)]);
+        if (sent == 4) return true;
+        // A partially accepted sequence must not leave our synthetic Ctrl or C pressed.
+        if (sent > 0) send([KeyInput(0x43, true), KeyInput(0x11, true)]);
+        return false;
+    }
     [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GetCursorPos(out Point point);
     [DllImport("user32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)]

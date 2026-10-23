@@ -148,12 +148,28 @@ internal sealed class RecordingWindow : Window
     {
         if (closeAllowed) return;
         cancelRequested = true; cancellation.Cancel(); stopButton.IsEnabled = cancelButton.IsEnabled = false;
-        await operation;
-        job.Discard(); FinishClose();
+        try { await operation; }
+        finally
+        {
+            try { job.Discard(); }
+            finally { FinishClose(); }
+        }
     }
 
     internal Task EndForSystemChange() => Cancel();
-    private void FinishClose() { if (!closeAllowed) { closeAllowed = true; Close(); } }
+    private void FinishClose()
+    {
+        if (closeAllowed) return;
+        closeAllowed = true;
+        try
+        {
+            if (job.CleanupPath != null)
+                notify("临时录屏文件待清理", job.CleanupRecorded
+                    ? "操作已结束，缓存目录内已保留同名 .cleanup 记录。"
+                    : "操作已结束，缓存文件未能删除，待清理记录也未能保存。");
+        }
+        finally { Close(); }
+    }
     private IntPtr OnWindowMessage(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
         if (message == 0x02E0 && started) _ = EndForSystemChange(); // DPI changed on the recording monitor.
@@ -162,7 +178,9 @@ internal sealed class RecordingWindow : Window
     private async void OnClosing(object? sender, CancelEventArgs e)
     {
         if (closeAllowed || !started) return;
-        e.Cancel = true; await Cancel();
+        e.Cancel = true;
+        await Dispatcher.Yield(DispatcherPriority.Background);
+        await Cancel();
     }
 }
 

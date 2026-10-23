@@ -33,6 +33,7 @@ internal static class PinChecks
     }
     internal static void Run(Action<string, Action> test)
     {
+        PinTextChecks.Run(test);
         test("pin large initial image fits negative monitor work area", () =>
         {
             var area = new PixelRect(-1920, -300, 0, 780); var g = new PinGeometry(3840, 2160, new(-100, 600), area);
@@ -214,6 +215,26 @@ internal static class PinChecks
                 Assert(blue[0] == 255 && blue[1] == 170 && blue[2] == 100 && blue[3] == 255);
                 var shadow = Pixels(new CroppedBitmap(preview, new Int32Rect(inset - 4, 80, 1, 1)));
                 Assert(shadow[3] > 0 && shadow[3] < 255);
+                var removeShadow = second.ContextMenu.Items.OfType<MenuItem>().Single(item => Equals(item.Header, "去除边框和阴影"));
+                Assert(removeShadow.IsCheckable && !removeShadow.IsChecked);
+                var originalBounds = second.Geometry.Bounds;
+                RenderTargetBitmap RenderPin()
+                {
+                    var image = new RenderTargetBitmap(900 + inset * 2, 220 + inset * 2, 96 * dpi.DpiScaleX, 96 * dpi.DpiScaleY, PixelFormats.Pbgra32);
+                    image.Render(content); return image;
+                }
+                removeShadow.IsChecked = true;
+                second.Zoom(1.1); second.ResetScale(); await Task.Delay(100); second.UpdateLayout();
+                var noShadow = RenderPin();
+                Assert(Pixels(new CroppedBitmap(noShadow, new Int32Rect(inset - 4, 80, 1, 1)))[3] == 0);
+                Assert(Pixels(new CroppedBitmap(noShadow, new Int32Rect(inset - 1, 80, 1, 1)))[3] == 0);
+                Assert(Pixels(new CroppedBitmap(noShadow, new Int32Rect(inset, inset, 900, 220))).SequenceEqual(actualPixels));
+                Assert(second.Geometry.Bounds == originalBounds);
+                removeShadow.IsChecked = false; await Task.Delay(50); second.UpdateLayout();
+                var restored = RenderPin();
+                Assert(Pixels(new CroppedBitmap(restored, new Int32Rect(inset - 4, 80, 1, 1))).SequenceEqual(shadow));
+                Assert(Pixels(new CroppedBitmap(restored, new Int32Rect(inset - 1, 80, 1, 1))).SequenceEqual(blue));
+                Console.WriteLine("PASS pin decoration toggle: border and shadow transparent, image unchanged, zoom retains setting and uncheck restores both.");
                 Assert(Pixels(second.Original!).SequenceEqual(Pixels(image)));
                 var display = new DrawingVisual();
                 using (var dc = display.RenderOpen())
@@ -229,6 +250,7 @@ internal static class PinChecks
                 Assert(manager.Count == 1 && second.Original == null);
                 manager.CloseAll(); Assert(manager.Count == 0 && second.Original == null);
                 Console.WriteLine("PASS native pin windows: image size, blue border, translucent glow, unchanged pixels, zoom, context-menu reset, monitor moves, suspend/resume, double-click close, Esc close, close all");
+                await PinTextChecks.CheckWindows();
             }
             finally { manager.CloseAll(); }
         });

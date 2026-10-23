@@ -8,7 +8,7 @@ using System.Windows.Input;
 
 namespace SnapTool;
 
-internal enum ShortcutAction { Capture, Copy, Pin, Save, Ocr, Translate, Undo, Delete, Cancel }
+internal enum ShortcutAction { Capture, Copy, Pin, Save, Ocr, Translate, Undo, Delete, Cancel, ClipboardTranslate }
 
 internal sealed record ShortcutGesture(Key Key, ModifierKeys Modifiers)
 {
@@ -28,7 +28,7 @@ internal sealed record ShortcutGesture(Key Key, ModifierKeys Modifiers)
 internal sealed class ShortcutProfile
 {
     internal static readonly (ShortcutAction Action, string Label)[] Actions = [
-        (ShortcutAction.Capture, "开始截图（全局）"), (ShortcutAction.Copy, "复制／完成并复制"),
+        (ShortcutAction.Capture, "开始截图（全局）"), (ShortcutAction.ClipboardTranslate, "剪贴板翻译（全局）"), (ShortcutAction.Copy, "复制／完成并复制"),
         (ShortcutAction.Pin, "选区贴图"), (ShortcutAction.Save, "保存图片"), (ShortcutAction.Ocr, "OCR"),
         (ShortcutAction.Translate, "选区翻译"), (ShortcutAction.Undo, "撤销标注"),
         (ShortcutAction.Delete, "删除标注"), (ShortcutAction.Cancel, "取消／关闭")];
@@ -38,7 +38,9 @@ internal sealed class ShortcutProfile
             Key.Home or Key.End or Key.PageUp or Key.PageDown or Key.Left or Key.Right or Key.Up or Key.Down or Key.Snapshot).ToArray();
     internal static ShortcutProfile Default { get; } = new(new()
     {
-        [ShortcutAction.Capture] = new(Key.F2, ModifierKeys.Control), [ShortcutAction.Copy] = new(Key.C, ModifierKeys.Control),
+        [ShortcutAction.Capture] = new(Key.F2, ModifierKeys.Control),
+        [ShortcutAction.ClipboardTranslate] = new(Key.T, ModifierKeys.Control | ModifierKeys.Alt),
+        [ShortcutAction.Copy] = new(Key.C, ModifierKeys.Control),
         [ShortcutAction.Pin] = new(Key.T, ModifierKeys.Control), [ShortcutAction.Save] = new(Key.S, ModifierKeys.Control),
         [ShortcutAction.Ocr] = new(Key.C, ModifierKeys.Shift), [ShortcutAction.Translate] = new(Key.T, ModifierKeys.Shift),
         [ShortcutAction.Undo] = new(Key.Z, ModifierKeys.Control), [ShortcutAction.Delete] = new(Key.Delete, ModifierKeys.None),
@@ -57,15 +59,20 @@ internal sealed class ShortcutProfile
         foreach (var (action, label) in Actions)
         {
             var value = bindings[action];
+            if (action == ShortcutAction.ClipboardTranslate && value is { Key: Key.None, Modifiers: ModifierKeys.None }) continue;
             if (value == null || !Keys.Contains(value.Key) || (value.Modifiers & ~(ModifierKeys.Control | ModifierKeys.Alt | ModifierKeys.Shift)) != 0)
                 throw new ArgumentException($"“{label}”的快捷键无效。");
         }
-        var capture = this[ShortcutAction.Capture];
-        if (capture.Key == Key.F12) throw new ArgumentException("F12 是 Windows 调试器保留键，请选择其他截图快捷键。");
-        if ((capture.Modifiers & (ModifierKeys.Control | ModifierKeys.Alt)) == 0 &&
-            !(capture.Key is >= Key.F1 and <= Key.F24 or Key.Snapshot))
-            throw new ArgumentException("全局截图请使用 Ctrl／Alt 组合键，或 F1～F24 功能键。");
-        foreach (var group in Actions.GroupBy(a => bindings[a.Action]).Where(g => g.Count() > 1))
+        foreach (var action in new[] { ShortcutAction.Capture, ShortcutAction.ClipboardTranslate })
+        {
+            var gesture = this[action];
+            if (action == ShortcutAction.ClipboardTranslate && gesture.Key == Key.None) continue;
+            if (gesture.Key == Key.F12) throw new ArgumentException("F12 是 Windows 调试器保留键，请选择其他全局快捷键。");
+            if ((gesture.Modifiers & (ModifierKeys.Control | ModifierKeys.Alt)) == 0 &&
+                !(gesture.Key is >= Key.F1 and <= Key.F24 or Key.Snapshot))
+                throw new ArgumentException("全局快捷键请使用 Ctrl／Alt 组合键，或 F1～F24 功能键。");
+        }
+        foreach (var group in Actions.Where(a => bindings[a.Action].Key != Key.None).GroupBy(a => bindings[a.Action]).Where(g => g.Count() > 1))
             throw new ArgumentException($"{group.Key} 重复用于 {string.Join("、", group.Select(a => a.Label))}，请分别设置。");
     }
 }
@@ -80,6 +87,11 @@ internal sealed class ShortcutSettings(string? filePath = null)
         if (!File.Exists(path)) return ShortcutProfile.Default;
         var bindings = JsonSerializer.Deserialize<Dictionary<ShortcutAction, ShortcutGesture>>(File.ReadAllText(path), Options)
             ?? throw new JsonException("快捷键配置为空。");
+        if (!bindings.ContainsKey(ShortcutAction.ClipboardTranslate))
+        {
+            var proposed = ShortcutProfile.Default[ShortcutAction.ClipboardTranslate];
+            bindings.Add(ShortcutAction.ClipboardTranslate, bindings.Values.Contains(proposed) ? new(Key.None, ModifierKeys.None) : proposed);
+        }
         var profile = new ShortcutProfile(bindings); profile.Validate(); return profile;
     }
     internal void Save(ShortcutProfile profile)
@@ -92,24 +104,47 @@ internal sealed class ShortcutSettings(string? filePath = null)
     }
 }
 
-internal sealed class CaptureHotkey : IDisposable
+internal sealed class GlobalHotkeys(Func<int, ShortcutGesture, bool> register, Action<int> unregister) : IDisposable
 {
-    private readonly Func<int, ShortcutGesture, bool> register;
-    private readonly Action<int> unregister;
-    internal ShortcutGesture Current { get; private set; }
-    internal int Id { get; private set; } = 1;
-    internal bool Registered { get; private set; }
-    internal CaptureHotkey(ShortcutGesture current, Func<int, ShortcutGesture, bool> register, Action<int> unregister)
-    { Current = current; this.register = register; this.unregister = unregister; }
-    internal void Apply(ShortcutGesture next, Action persist)
+    private Dictionary<ShortcutAction, (int Id, ShortcutGesture Gesture)> active = new();
+    internal bool Matches(ShortcutAction action, int id) => active.TryGetValue(action, out var value) && value.Id == id;
+    internal bool Registered(ShortcutAction action) => active.ContainsKey(action);
+    internal ShortcutGesture? Current(ShortcutAction action) => active.TryGetValue(action, out var value) ? value.Gesture : null;
+
+    internal void Apply(ShortcutProfile next, Action persist) => Apply(new Dictionary<ShortcutAction, ShortcutGesture>
     {
-        if (Registered && next == Current) { persist(); return; }
-        int candidate = Registered ? (Id == 1 ? 2 : 1) : Id;
-        if (!register(candidate, next)) throw new InvalidOperationException($"无法注册 {next}，可能已被其他程序占用。原设置已保留。");
-        try { persist(); }
-        catch { unregister(candidate); throw; }
-        if (Registered) unregister(Id);
-        Id = candidate; Current = next; Registered = true;
+        [ShortcutAction.Capture] = next[ShortcutAction.Capture],
+        [ShortcutAction.ClipboardTranslate] = next[ShortcutAction.ClipboardTranslate]
+    }, persist);
+
+    internal void Apply(ShortcutAction action, ShortcutGesture gesture, Action persist)
+    {
+        var next = active.ToDictionary(pair => pair.Key, pair => pair.Value.Gesture);
+        next[action] = gesture; Apply(next, persist);
     }
-    public void Dispose() { if (Registered) { unregister(Id); Registered = false; } }
+
+    private void Apply(Dictionary<ShortcutAction, ShortcutGesture> next, Action persist)
+    {
+        var pending = new Dictionary<ShortcutAction, (int Id, ShortcutGesture Gesture)>();
+        var added = new List<int>();
+        try
+        {
+            foreach (var (action, gesture) in next)
+            {
+                if (gesture.Key == Key.None) continue;
+                // Reuse registrations by gesture, including when the two actions exchange keys.
+                var existing = active.Values.FirstOrDefault(value => value.Gesture == gesture);
+                if (existing.Id != 0) { pending.Add(action, existing); continue; }
+                int id = Enumerable.Range(1, 4).First(candidate => !active.Values.Any(value => value.Id == candidate) && !added.Contains(candidate));
+                if (!register(id, gesture)) throw new InvalidOperationException($"无法注册 {gesture}，可能已被其他程序占用。原设置已保留。");
+                added.Add(id); pending.Add(action, (id, gesture));
+            }
+            persist();
+        }
+        catch { foreach (int id in added) unregister(id); throw; }
+        foreach (var previous in active.Values)
+            if (!pending.Values.Any(value => value.Id == previous.Id)) unregister(previous.Id);
+        active = pending;
+    }
+    public void Dispose() { foreach (var value in active.Values) unregister(value.Id); active.Clear(); }
 }

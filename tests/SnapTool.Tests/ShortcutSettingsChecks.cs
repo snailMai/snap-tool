@@ -56,6 +56,62 @@ internal static class ShortcutSettingsChecks
 
     internal static void Run(Action<string, Action> test)
     {
+        test("legacy shortcut migration preserves user bindings and original file", () =>
+        {
+            Directory.CreateDirectory(DirectoryPath);
+            foreach (bool conflict in new[] { false, true })
+            {
+                string path = Path.Combine(DirectoryPath, Guid.NewGuid().ToString("N") + ".json"); var store = new ShortcutSettings(path);
+                var values = Custom().Export(); values.Remove(ShortcutAction.ClipboardTranslate);
+                if (conflict) values[ShortcutAction.Translate] = ShortcutProfile.Default[ShortcutAction.ClipboardTranslate];
+                string legacy = System.Text.Json.JsonSerializer.Serialize(values, new System.Text.Json.JsonSerializerOptions
+                { Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() } });
+                File.WriteAllText(path, legacy); var loaded = store.Load();
+                Assert(File.ReadAllText(path) == legacy && values.All(pair => loaded[pair.Key] == pair.Value));
+                Assert(loaded[ShortcutAction.ClipboardTranslate] == (conflict ? new(Key.None, ModifierKeys.None) : ShortcutProfile.Default[ShortcutAction.ClipboardTranslate]));
+                store.Save(loaded); Assert(Same(store.Load(), loaded));
+            }
+        });
+        test("clipboard global shortcut validates reserved keys and missing old actions", () =>
+        {
+            foreach (var invalid in new[] { new ShortcutGesture(Key.F12, ModifierKeys.Control), new(Key.T, ModifierKeys.None),
+                ShortcutProfile.Default[ShortcutAction.Capture], new(Key.None, ModifierKeys.Control) })
+            {
+                var values = ShortcutProfile.Default.Export(); values[ShortcutAction.ClipboardTranslate] = invalid;
+                bool rejected = false; try { new ShortcutProfile(values).Validate(); } catch (ArgumentException) { rejected = true; }
+                Assert(rejected);
+            }
+            string path = Path.Combine(DirectoryPath, Guid.NewGuid().ToString("N") + ".json");
+            File.WriteAllText(path, "{}"); bool incomplete = false;
+            try { new ShortcutSettings(path).Load(); } catch (ArgumentException) { incomplete = true; }
+            Assert(incomplete && File.ReadAllText(path) == "{}");
+        });
+        test("two global hotkeys roll back both candidates on conflict or save failure", () =>
+        {
+            var active = new Dictionary<int, ShortcutGesture>(); ShortcutGesture? conflict = null; int saves = 0;
+            bool Register(int id, ShortcutGesture value) { if (value == conflict) return false; active.Add(id, value); return true; }
+            using var hotkeys = new GlobalHotkeys(Register, id => active.Remove(id));
+            hotkeys.Apply(ShortcutProfile.Default, () => { });
+            int captureId = active.Single(pair => pair.Value == ShortcutProfile.Default[ShortcutAction.Capture]).Key;
+            int clipboardId = active.Single(pair => pair.Value == ShortcutProfile.Default[ShortcutAction.ClipboardTranslate]).Key;
+            var nextCapture = new ShortcutGesture(Key.F9, ModifierKeys.Control); var nextClipboard = new ShortcutGesture(Key.F10, ModifierKeys.Control);
+            var values = ShortcutProfile.Default.Export(); values[ShortcutAction.Capture] = nextCapture; values[ShortcutAction.ClipboardTranslate] = nextClipboard;
+            var next = new ShortcutProfile(values);
+            conflict = nextClipboard;
+            try { hotkeys.Apply(next, () => saves++); } catch (InvalidOperationException) { }
+            Assert(saves == 0 && active.Count == 2 && active.ContainsKey(captureId) && active.ContainsKey(clipboardId));
+            conflict = null;
+            try { hotkeys.Apply(next, () => throw new IOException("synthetic failure")); } catch (IOException) { }
+            Assert(active.Count == 2 && hotkeys.Matches(ShortcutAction.Capture, captureId) && hotkeys.Matches(ShortcutAction.ClipboardTranslate, clipboardId));
+            hotkeys.Apply(next, () => { Assert(active.Count == 4); saves++; });
+            Assert(saves == 1 && active.Count == 2 && hotkeys.Current(ShortcutAction.Capture) == nextCapture && hotkeys.Current(ShortcutAction.ClipboardTranslate) == nextClipboard);
+            Assert(!active.ContainsKey(captureId) && !active.ContainsKey(clipboardId));
+            try { hotkeys.Apply(ShortcutAction.ClipboardTranslate, new(Key.None, ModifierKeys.None), () => throw new IOException("synthetic failure")); } catch (IOException) { }
+            Assert(hotkeys.Registered(ShortcutAction.ClipboardTranslate) && active.Count == 2);
+            hotkeys.Apply(ShortcutAction.ClipboardTranslate, new(Key.None, ModifierKeys.None), () => saves++);
+            Assert(!hotkeys.Registered(ShortcutAction.ClipboardTranslate) && active.Count == 1);
+            hotkeys.Apply(ShortcutAction.ClipboardTranslate, nextClipboard, () => { }); hotkeys.Dispose(); Assert(active.Count == 0);
+        });
         test("shortcut defaults roundtrip through storage and returned dictionaries are independent", () =>
         {
             Directory.CreateDirectory(DirectoryPath); string path = Path.Combine(DirectoryPath, Guid.NewGuid().ToString("N") + ".json");
@@ -81,18 +137,20 @@ internal static class ShortcutSettingsChecks
         test("hotkey conflict and persistence failure retain the old registration and binding", () =>
         {
             var active = new Dictionary<int, ShortcutGesture>(); bool conflict = false; int saves = 0;
-            using var hotkey = new CaptureHotkey(ShortcutProfile.Default[ShortcutAction.Capture],
+            using var hotkey = new GlobalHotkeys(
                 (id, gesture) => { if (conflict) return false; active.Add(id, gesture); return true; }, id => active.Remove(id));
-            hotkey.Apply(hotkey.Current, () => { }); int oldId = hotkey.Id; var old = hotkey.Current;
+            var old = ShortcutProfile.Default[ShortcutAction.Capture];
+            hotkey.Apply(ShortcutAction.Capture, old, () => { }); int oldId = active.Single().Key;
             conflict = true;
-            try { hotkey.Apply(Custom()[ShortcutAction.Capture], () => saves++); } catch (InvalidOperationException) { }
-            Assert(saves == 0 && hotkey.Current == old && active.Count == 1 && active.ContainsKey(oldId));
+            try { hotkey.Apply(ShortcutAction.Capture, Custom()[ShortcutAction.Capture], () => saves++); } catch (InvalidOperationException) { }
+            Assert(saves == 0 && hotkey.Current(ShortcutAction.Capture) == old && active.Count == 1 && active.ContainsKey(oldId));
             conflict = false;
-            try { hotkey.Apply(Custom()[ShortcutAction.Capture], () => throw new IOException("synthetic write failure")); } catch (IOException) { }
-            Assert(hotkey.Current == old && hotkey.Id == oldId && active.Count == 1 && active[oldId] == old);
-            hotkey.Apply(Custom()[ShortcutAction.Capture], () => { Assert(active.Count == 2 && active[oldId] == old); saves++; });
-            Assert(saves == 1 && active.Count == 1 && hotkey.Id != oldId && hotkey.Current == Custom()[ShortcutAction.Capture]);
-            int sameId = hotkey.Id; hotkey.Apply(hotkey.Current, () => saves++); Assert(hotkey.Id == sameId && active.Count == 1 && saves == 2);
+            try { hotkey.Apply(ShortcutAction.Capture, Custom()[ShortcutAction.Capture], () => throw new IOException("synthetic write failure")); } catch (IOException) { }
+            Assert(hotkey.Current(ShortcutAction.Capture) == old && hotkey.Matches(ShortcutAction.Capture, oldId) && active.Count == 1 && active[oldId] == old);
+            hotkey.Apply(ShortcutAction.Capture, Custom()[ShortcutAction.Capture], () => { Assert(active.Count == 2 && active[oldId] == old); saves++; });
+            Assert(saves == 1 && active.Count == 1 && !active.ContainsKey(oldId) && hotkey.Current(ShortcutAction.Capture) == Custom()[ShortcutAction.Capture]);
+            int sameId = active.Single().Key; hotkey.Apply(ShortcutAction.Capture, Custom()[ShortcutAction.Capture], () => saves++);
+            Assert(hotkey.Matches(ShortcutAction.Capture, sameId) && active.Count == 1 && saves == 2);
             hotkey.Dispose(); Assert(active.Count == 0);
         });
         test("configured screenshot copy and pin replace old keys and update hints live", () => OcrChecks.Pump(async () =>
@@ -279,25 +337,56 @@ internal static class ShortcutSettingsChecks
         {
             var gesture = new ShortcutGesture(key, ModifierKeys.Control | ModifierKeys.Alt | ModifierKeys.Shift);
             if (!Native.RegisterHotKey(contender.Handle, 90, (uint)gesture.Modifiers | 0x4000, (uint)KeyInterop.VirtualKeyFromKey(key))) continue;
-            Native.UnregisterHotKey(contender.Handle, 90); available.Add(gesture); if (available.Count == 2) break;
+            Native.UnregisterHotKey(contender.Handle, 90); available.Add(gesture); if (available.Count == 4) break;
         }
-        Assert(available.Count == 2);
-        using var registration = new CaptureHotkey(available[0],
+        Assert(available.Count == 4);
+        using var registration = new GlobalHotkeys(
             (id, gesture) => Native.RegisterHotKey(owner.Handle, id, (uint)gesture.Modifiers | 0x4000, (uint)KeyInterop.VirtualKeyFromKey(gesture.Key)),
             id => { Native.UnregisterHotKey(owner.Handle, id); });
         try
         {
-            registration.Apply(available[0], () => { });
+            registration.Apply(ShortcutAction.Capture, available[0], () => { });
             Assert(Native.RegisterHotKey(contender.Handle, 91, (uint)available[1].Modifiers | 0x4000, (uint)KeyInterop.VirtualKeyFromKey(available[1].Key)));
             bool refused = false;
-            try { registration.Apply(available[1], () => throw new Exception("Should not save")); } catch (InvalidOperationException) { refused = true; }
-            Assert(refused && registration.Current == available[0]); Native.UnregisterHotKey(contender.Handle, 91);
-            registration.Apply(available[1], () => { });
+            try { registration.Apply(ShortcutAction.Capture, available[1], () => throw new Exception("Should not save")); } catch (InvalidOperationException) { refused = true; }
+            Assert(refused && registration.Current(ShortcutAction.Capture) == available[0]); Native.UnregisterHotKey(contender.Handle, 91);
+            registration.Apply(ShortcutAction.Capture, available[1], () => { });
             Assert(Native.RegisterHotKey(contender.Handle, 92, (uint)available[0].Modifiers | 0x4000, (uint)KeyInterop.VirtualKeyFromKey(available[0].Key)));
             Console.WriteLine("PASS native hotkey conflict preserves old registration and successful update releases old key; no user shortcuts or keyboard input used.");
         }
         finally { Native.UnregisterHotKey(contender.Handle, 91); Native.UnregisterHotKey(contender.Handle, 92); }
         registration.Dispose();
+        using (var hotkeys = new GlobalHotkeys(
+            (id, gesture) => Native.RegisterHotKey(owner.Handle, id, (uint)gesture.Modifiers | 0x4000, (uint)KeyInterop.VirtualKeyFromKey(gesture.Key)),
+            id => { Native.UnregisterHotKey(owner.Handle, id); }))
+        {
+            ShortcutProfile Profile(int capture, int clipboard)
+            {
+                var bindings = ShortcutProfile.Default.Export(); bindings[ShortcutAction.Capture] = available[capture];
+                bindings[ShortcutAction.ClipboardTranslate] = available[clipboard]; return new(bindings);
+            }
+            hotkeys.Apply(Profile(0, 1), () => { });
+            Assert(Native.RegisterHotKey(contender.Handle, 93, (uint)available[3].Modifiers | 0x4000, (uint)KeyInterop.VirtualKeyFromKey(available[3].Key)));
+            try
+            {
+                bool refused = false;
+                try { hotkeys.Apply(Profile(2, 3), () => throw new Exception("Should not save")); }
+                catch (InvalidOperationException) { refused = true; }
+                Assert(refused && hotkeys.Current(ShortcutAction.Capture) == available[0] && hotkeys.Current(ShortcutAction.ClipboardTranslate) == available[1]);
+            }
+            finally { Native.UnregisterHotKey(contender.Handle, 93); }
+            bool saveFailed = false;
+            try { hotkeys.Apply(Profile(2, 3), () => throw new IOException("synthetic save failure")); }
+            catch (IOException) { saveFailed = true; }
+            Assert(saveFailed && hotkeys.Current(ShortcutAction.Capture) == available[0] && hotkeys.Current(ShortcutAction.ClipboardTranslate) == available[1]);
+            hotkeys.Apply(Profile(2, 3), () => { });
+            hotkeys.Apply(Profile(3, 2), () => { });
+            Assert(hotkeys.Current(ShortcutAction.Capture) == available[3] && hotkeys.Current(ShortcutAction.ClipboardTranslate) == available[2]);
+            // Moving one action onto the other's old key must also reuse that registration.
+            hotkeys.Apply(Profile(2, 0), () => { });
+            Assert(hotkeys.Current(ShortcutAction.Capture) == available[2] && hotkeys.Current(ShortcutAction.ClipboardTranslate) == available[0]);
+            Console.WriteLine("PASS native two global hotkeys: conflict/save failure roll back both; update, swap and key reuse succeed.");
+        }
         var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         var configuration = Configuration(Custom(), _ => { });
         try
@@ -310,6 +399,7 @@ internal static class ShortcutSettingsChecks
                 Assert(configuration.IsVisible && RefreshChecks.Descendants<PasswordBox>((DependencyObject)configuration.Content).Any());
                 var translation = (FrameworkElement)((TabItem)tabs.Items[1]).Content;
                 Assert(translation.ActualWidth <= tabs.ActualWidth);
+                Assert(RefreshChecks.Descendants<CheckBox>(translation).Single().IsChecked == true);
                 tabs.SelectedIndex = 0; await Task.Delay(50);
                 var monitor = Native.Monitors()[0];
                 var recorder = new RecordingWindow(new(monitor.Left + 120, monitor.Top + 120, monitor.Left + 440, monitor.Top + 300),

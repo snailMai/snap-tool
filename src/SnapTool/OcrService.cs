@@ -1,12 +1,16 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using RapidOcrNet;
 using SkiaSharp;
+using SnapTool.Core;
 
 namespace SnapTool;
 
@@ -32,7 +36,13 @@ internal sealed class OcrService : IDisposable
 
     internal bool IsLoaded => Volatile.Read(ref engine) != null;
 
-    internal Task<string> Recognize(BitmapSource image, CancellationToken token)
+    internal async Task<string> Recognize(BitmapSource image, CancellationToken token) =>
+        (await Detect(image, token, false)).StrRes.TrimEnd('\r', '\n');
+
+    internal async Task<OcrTextLayout> RecognizeLayout(BitmapSource image, CancellationToken token) =>
+        CreateLayout(await Detect(image, token, true), image.PixelWidth, image.PixelHeight);
+
+    private Task<OcrResult> Detect(BitmapSource image, CancellationToken token, bool locate)
     {
         if (!image.IsFrozen) throw new ArgumentException("OCR 输入必须为冻结的截图。", nameof(image));
         return Task.Run(async () =>
@@ -45,13 +55,14 @@ internal sealed class OcrService : IDisposable
                 idleTimer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
                 EnsureEngine();
                 token.ThrowIfCancellationRequested();
-                var converted = new FormatConvertedBitmap(image, PixelFormats.Bgr32, null, 0);
-                using var bitmap = new SKBitmap(image.PixelWidth, image.PixelHeight, SKColorType.Bgra8888, SKAlphaType.Opaque);
+                var converted = new FormatConvertedBitmap(image, locate ? PixelFormats.Pbgra32 : PixelFormats.Bgr32, null, 0);
+                using var bitmap = new SKBitmap(image.PixelWidth, image.PixelHeight, SKColorType.Bgra8888, locate ? SKAlphaType.Premul : SKAlphaType.Opaque);
                 converted.CopyPixels(System.Windows.Int32Rect.Empty, bitmap.GetPixels(), checked(bitmap.RowBytes * bitmap.Height), bitmap.RowBytes);
+                if (locate) { using var canvas = new SKCanvas(bitmap); canvas.DrawColor(SKColors.White, SKBlendMode.DstOver); }
                 // Preserve screenshot detail up to 2048 px; recognition crops use the original image.
-                var result = engine!.Detect(bitmap, RapidOcrOptions.Default with { ImgResize = 2048 }, token);
+                var result = engine!.Detect(bitmap, RapidOcrOptions.Default with { ImgResize = 2048, ReturnWordBox = locate, ReturnSingleCharBox = locate }, token);
                 token.ThrowIfCancellationRequested();
-                return result.StrRes.TrimEnd('\r', '\n');
+                return result;
             }
             finally
             {
@@ -63,6 +74,29 @@ internal sealed class OcrService : IDisposable
                 gate.Release();
             }
         }, token);
+    }
+
+    internal static OcrTextLayout CreateLayout(OcrResult result, int width, int height)
+    {
+        var text = new StringBuilder(); var glyphs = new List<OcrGlyph>();
+        foreach (var block in result.TextBlocks)
+        {
+            if (string.IsNullOrWhiteSpace(block.Text)) continue;
+            if (text.Length > 0) text.Append('\n');
+            int start = text.Length, cursor = 0; text.Append(block.Text);
+            foreach (var word in block.WordResults ?? [])
+            {
+                if (string.IsNullOrEmpty(word.Text)) continue;
+                int offset = block.Text.IndexOf(word.Text, cursor, StringComparison.Ordinal);
+                if (offset < 0) continue;
+                cursor = offset + word.Text.Length;
+                if (word.BoxPoints.Length != 4) continue;
+                var corners = word.BoxPoints.Select(p => new PixelPoint(Math.Clamp(p.X, 0, width), Math.Clamp(p.Y, 0, height))).ToArray();
+                var glyph = new OcrGlyph(start + offset, word.Text.Length, corners);
+                if (!glyph.Bounds.IsEmpty) glyphs.Add(glyph);
+            }
+        }
+        return new(text.ToString(), glyphs.ToArray());
     }
 
     private void ReleaseIdleEngine(object? state)

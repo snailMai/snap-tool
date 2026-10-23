@@ -28,14 +28,25 @@ internal sealed class App : Application
     private readonly AnnotationStyleSettings annotationStyleSettings = new();
     private AnnotationStyleProfile annotationStyle = new();
     private ShortcutProfile shortcuts = ShortcutProfile.Default;
-    private CaptureHotkey? captureHotkey;
+    private GlobalHotkeys? hotkeys;
     private SettingsWindow? configuration;
     private Forms.ToolStripMenuItem? captureMenu;
+    private Forms.ToolStripMenuItem? clipboardMenu;
+    private TranslationWindow? clipboardWindow;
+    private bool clipboardQueued;
+    private readonly CancellationTokenSource clipboardLifetime = new();
+    private readonly ClipboardTranslation clipboardTranslation;
     private readonly OcrService ocr = new();
     private readonly TranslationSettings translationSettings = new();
+    private readonly TranslationBehaviorSettings translationBehaviorSettings = new();
     private readonly YoudaoTranslator translator = new();
     private readonly PinWindows pins;
-    internal App() { pins = new(() => shortcuts); }
+    internal App()
+    {
+        pins = new(() => shortcuts, ocr.RecognizeLayout);
+        clipboardTranslation = new(() => System.Windows.Clipboard.GetText(TextDataFormat.UnicodeText),
+            ShowClipboardTranslation, message => UpdateStatus("剪贴板翻译", message));
+    }
 
     [STAThread]
     public static void Main(string[] args)
@@ -73,12 +84,13 @@ internal sealed class App : Application
         try { annotationStyle = annotationStyleSettings.Load(); }
         catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException or ArgumentException or System.Text.Json.JsonException)
         { annotationStyle = new(); invalidStyleSettings = true; }
-        captureHotkey = new(shortcuts[ShortcutAction.Capture],
+        hotkeys = new(
             (id, key) => Native.RegisterHotKey(source.Handle, id, (uint)key.Modifiers | 0x4000, (uint)System.Windows.Input.KeyInterop.VirtualKeyFromKey(key.Key)),
             id => { if (source != null) Native.UnregisterHotKey(source.Handle, id); });
         icon = MakeIcon();
         var menu = new Forms.ContextMenuStrip();
         captureMenu = (Forms.ToolStripMenuItem)menu.Items.Add("截图", null, (_, _) => QueueCapture());
+        clipboardMenu = (Forms.ToolStripMenuItem)menu.Items.Add("翻译剪贴板", null, (_, _) => QueueClipboardTranslation());
         menu.Items.Add("配置…", null, (_, _) => ShowConfiguration());
         menu.Items.Add("重新注册截图快捷键", null, (_, _) => RegisterHotkey(true));
         menu.Items.Add("关闭全部贴图", null, (_, _) => pins.CloseAll());
@@ -88,6 +100,14 @@ internal sealed class App : Application
         RefreshShortcuts();
         tray.DoubleClick += (_, _) => QueueCapture();
         RegisterHotkey(false);
+        try
+        {
+            hotkeys.Apply(ShortcutAction.ClipboardTranslate, shortcuts[ShortcutAction.ClipboardTranslate], () => { }); RefreshShortcuts();
+            if (shortcuts[ShortcutAction.ClipboardTranslate].Key == System.Windows.Input.Key.None)
+                UpdateStatus("剪贴板翻译快捷键未设置", "旧快捷键已保留，请在配置中设置，或使用托盘菜单。");
+        }
+        catch (InvalidOperationException)
+        { RefreshShortcuts(); UpdateStatus("剪贴板翻译快捷键不可用", "可在配置中改键，或使用托盘“翻译剪贴板”。"); }
         sessionNotifications = Native.WTSRegisterSessionNotification(source.Handle, 0);
         if (invalidSettings) UpdateStatus("快捷键配置无法读取", "已临时使用默认快捷键；可在托盘右键“配置”中重新保存，原文件未覆盖。");
         else if (invalidStyleSettings) UpdateStatus("样式配置无法读取", "已临时使用默认样式；原文件未覆盖，重新修改样式后保存。");
@@ -114,8 +134,8 @@ internal sealed class App : Application
     {
         try
         {
-            captureHotkey!.Apply(shortcuts[ShortcutAction.Capture], () => { });
-            if (notifySuccess) UpdateStatus("快捷键可用", $"{captureHotkey.Current} 已注册。");
+            hotkeys!.Apply(ShortcutAction.Capture, shortcuts[ShortcutAction.Capture], () => { });
+            if (notifySuccess) UpdateStatus("快捷键可用", $"{shortcuts[ShortcutAction.Capture]} 已注册。");
         }
         catch (InvalidOperationException ex)
         { MessageBox.Show(ex.Message + "\n可通过托盘右键“配置”修改，或释放占用后重新注册。也可从托盘菜单截图。", "Snap Tool · 快捷键不可用", MessageBoxButton.OK, MessageBoxImage.Warning); }
@@ -126,9 +146,9 @@ internal sealed class App : Application
         if (configuration != null) { configuration.Activate(); return; }
         configuration = new(shortcuts, next =>
         {
-            next.Validate(); captureHotkey!.Apply(next[ShortcutAction.Capture], () => shortcutSettings.Save(next));
+            next.Validate(); hotkeys!.Apply(next, () => shortcutSettings.Save(next));
             shortcuts = next; RefreshShortcuts();
-        }, translationSettings.Load, translationSettings.Save);
+        }, translationSettings.Load, translationSettings.Save, translationBehaviorSettings.Load, translationBehaviorSettings.Save);
         try { configuration.ShowDialog(); }
         finally { configuration = null; }
     }
@@ -136,6 +156,8 @@ internal sealed class App : Application
     private void RefreshShortcuts()
     {
         if (captureMenu != null) captureMenu.Text = $"截图    {shortcuts[ShortcutAction.Capture]}";
+        if (clipboardMenu != null) clipboardMenu.Text = "翻译剪贴板    " +
+            (hotkeys?.Registered(ShortcutAction.ClipboardTranslate) == true ? shortcuts[ShortcutAction.ClipboardTranslate].ToString() : "快捷键未启用");
         if (tray != null) tray.Text = $"Snap Tool · {shortcuts[ShortcutAction.Capture]} 截图";
         foreach (Window window in Windows)
             switch (window)
@@ -149,10 +171,15 @@ internal sealed class App : Application
 
     private IntPtr WindowMessage(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
-        if (message == 0x0312 && captureHotkey is { Registered: true } && wParam.ToInt32() == captureHotkey.Id)
+        if (message == 0x0312 && hotkeys?.Matches(ShortcutAction.Capture, wParam.ToInt32()) == true)
         {
             handled = true;
             QueueCapture();
+        }
+        else if (message == 0x0312 && hotkeys?.Matches(ShortcutAction.ClipboardTranslate, wParam.ToInt32()) == true)
+        {
+            handled = true;
+            QueueClipboardTranslation(copySelection: true);
         }
         else if (message == 0x007E) { session?.Close(); scrollCapture?.Close(); if (recording != null) _ = recording.EndForSystemChange(); pins.Reposition(); }
         else if (message == 0x02B1 && wParam.ToInt32() == 7) { if (recording != null) _ = recording.EndForSystemChange(); } // Session locked.
@@ -163,7 +190,7 @@ internal sealed class App : Application
     private bool queued;
     private void QueueCapture()
     {
-        if (session != null || scrollCapture != null || recording != null || configuration != null || queued || exiting) return;
+        if (session != null || scrollCapture != null || recording != null || configuration != null || queued || clipboardQueued || exiting) return;
         queued = true;
         Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(async () =>
         {
@@ -217,7 +244,7 @@ internal sealed class App : Application
     private async Task ExitSafely()
     {
         if (exiting) return;
-        exiting = true; session?.Close(); scrollCapture?.Close();
+        exiting = true; clipboardLifetime.Cancel(); clipboardWindow?.Close(); session?.Close(); scrollCapture?.Close();
         if (recording != null) await recording.EndForSystemChange();
         Shutdown();
     }
@@ -247,15 +274,48 @@ internal sealed class App : Application
         window.Show(); window.Activate();
     }
 
+    private void QueueClipboardTranslation(bool copySelection = false)
+    {
+        if (session != null || scrollCapture != null || recording != null || configuration != null || queued || clipboardQueued || exiting) return;
+        if (clipboardWindow != null) { clipboardWindow.Activate(); return; }
+        IntPtr target = copySelection ? Native.GetForegroundWindow() : IntPtr.Zero;
+        clipboardQueued = true;
+        Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(async () =>
+        {
+            try
+            {
+                bool copy = copySelection && translationBehaviorSettings.Load();
+                var selection = copy ? SelectionCopy.ForShortcut(shortcuts[ShortcutAction.ClipboardTranslate]) : null;
+                await clipboardTranslation.Run(clipboardLifetime.Token,
+                    selection == null ? null : token => selection.Run(target, token));
+            }
+            catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
+            { if (!exiting) UpdateStatus("快捷翻译配置无法读取", "请在配置的翻译设置页重新保存翻译行为。"); }
+            finally { clipboardQueued = false; }
+        }));
+    }
+
+    private void ShowClipboardTranslation(string text)
+    {
+        if (exiting || session != null || scrollCapture != null || recording != null || configuration != null) return;
+        var window = new TranslationWindow(text,
+            (original, target, token) => translator.Translate(original, target, translationSettings.Load(), token),
+            getShortcuts: () => shortcuts, fromClipboard: true);
+        clipboardWindow = window;
+        window.Closed += (_, _) => { if (clipboardWindow == window) clipboardWindow = null; };
+        window.Show(); window.Activate();
+    }
+
     protected override void OnExit(ExitEventArgs e)
     {
+        clipboardLifetime.Cancel(); clipboardLifetime.Dispose();
         pins.CloseAll();
         scrollCapture?.Close();
         session?.Close();
         ocr.Dispose();
         translator.Dispose();
         if (source != null) Native.WTSUnRegisterSessionNotification(source.Handle);
-        captureHotkey?.Dispose();
+        hotkeys?.Dispose();
         source?.Dispose(); source = null;
         if (tray != null) { tray.Visible = false; tray.ContextMenuStrip?.Dispose(); tray.Dispose(); }
         icon?.Dispose();

@@ -31,10 +31,23 @@ internal static class TranslationUi
 
 internal sealed class TranslationSettingsPanel : ScrollViewer
 {
-    internal TranslationSettingsPanel(Func<YoudaoCredentials> load, Action<YoudaoCredentials> save)
+    internal TranslationSettingsPanel(Func<YoudaoCredentials> load, Action<YoudaoCredentials> save,
+        Func<bool>? loadCopySelection = null, Action<bool>? saveCopySelection = null)
     {
         var panel = new StackPanel { Margin = new Thickness(16) };
         Content = panel; VerticalScrollBarVisibility = ScrollBarVisibility.Auto; HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled;
+        panel.Children.Add(TranslationUi.Text("快捷翻译", 23));
+        var copySelection = new CheckBox { Content = "翻译前自动复制选中文字（仅快捷键触发）", IsChecked = true, Margin = new Thickness(0, 0, 0, 10) };
+        panel.Children.Add(copySelection);
+        panel.Children.Add(TranslationUi.Text("勾选后：选中文字，按翻译快捷键即可自动复制并翻译。取消勾选：翻译已复制的文本。托盘菜单始终翻译已有剪贴板。", 12));
+        var behaviorStatus = TranslationUi.Text("", 12); panel.Children.Add(behaviorStatus);
+        try { copySelection.IsChecked = loadCopySelection?.Invoke() ?? true; }
+        catch { behaviorStatus.Text = "快捷翻译配置无法读取，请选择后重新保存。"; }
+        panel.Children.Add(TranslationUi.Button("保存翻译行为", () =>
+        {
+            try { saveCopySelection?.Invoke(copySelection.IsChecked == true); behaviorStatus.Text = "翻译行为已保存，下次启动继续使用。"; }
+            catch { behaviorStatus.Text = "保存失败，原设置保持不变，请重试。"; }
+        }));
         panel.Children.Add(TranslationUi.Text("连接有道文本翻译", 23));
         panel.Children.Add(TranslationUi.Text("请在有道智云创建应用，并绑定“文本翻译”服务。这里填写的是 API 应用凭据，不是有道账号密码。"));
         panel.Children.Add(TranslationUi.Text("应用 ID"));
@@ -43,7 +56,7 @@ internal sealed class TranslationSettingsPanel : ScrollViewer
         panel.Children.Add(TranslationUi.Text("应用密钥"));
         var secret = new PasswordBox { Padding = new Thickness(9), Margin = new Thickness(0, 0, 0, 15) };
         panel.Children.Add(secret);
-        panel.Children.Add(TranslationUi.Text("仅在主动翻译时发送识别文字给有道，不上传截图。密钥加密保存在当前 Windows 用户下；保存设置不会调用接口。"));
+        panel.Children.Add(TranslationUi.Text("仅在主动翻译时发送原文给有道，不上传截图。密钥加密保存在当前 Windows 用户下；保存设置不会调用接口。"));
         var status = TranslationUi.Text(""); status.Foreground = Brushes.Firebrick; panel.Children.Add(status);
         try { var saved = load(); appId.Text = saved.AppId; secret.Password = saved.Secret; }
         catch { status.Text = "已有配置无法读取，请重新填写并保存。"; }
@@ -73,7 +86,7 @@ internal sealed class TranslationWindow : Window
     private bool closed, closing;
 
     internal TranslationWindow(string original, Func<string, string, CancellationToken, Task<string>> translate,
-        Func<string, CancellationToken, Task>? copyText = null, Func<ShortcutProfile>? getShortcuts = null)
+        Func<string, CancellationToken, Task>? copyText = null, Func<ShortcutProfile>? getShortcuts = null, bool fromClipboard = false)
     {
         this.copyText = copyText ?? ImageOutput.CopyText;
         this.getShortcuts = getShortcuts ?? (() => ShortcutProfile.Default);
@@ -85,8 +98,10 @@ internal sealed class TranslationWindow : Window
         root.RowDefinitions.Add(new() { Height = GridLength.Auto });
         root.RowDefinitions.Add(new() { Height = new GridLength(1, GridUnitType.Star) });
         root.RowDefinitions.Add(new() { Height = GridLength.Auto });
-        var heading = new StackPanel(); heading.Children.Add(TranslationUi.Text("选区翻译", 25));
-        heading.Children.Add(TranslationUi.Text("有道文本翻译 · 仅发送原文，不上传截图 · 可修改 OCR 原文后重新翻译"));
+        var heading = new StackPanel(); heading.Children.Add(TranslationUi.Text(fromClipboard ? "剪贴板翻译" : "选区翻译", 25));
+        heading.Children.Add(TranslationUi.Text(fromClipboard
+            ? "有道文本翻译 · 仅发送本次复制的原文 · 可修改原文后重新翻译"
+            : "有道文本翻译 · 仅发送原文，不上传截图 · 可修改 OCR 原文后重新翻译"));
         root.Children.Add(heading);
         var actions = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 4, 0, 18) };
         actions.Children.Add(new TextBlock { Text = "译为", VerticalAlignment = VerticalAlignment.Center, Foreground = TranslationUi.Ink });

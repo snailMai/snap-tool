@@ -27,6 +27,7 @@ internal static class RecordingChecks
     }
     internal static void Run(Action<string, Action> test)
     {
+        RecordingCleanupChecks.Run(test);
         test("recording size fits 1080p bounds without upscaling or cropping odd dimensions", () =>
         {
             Assert(RecordingSize.Fit(new(0, 0, 3840, 2160)) == new RecordingSize(1920, 1080));
@@ -233,6 +234,7 @@ internal static class RecordingChecks
                 await ShortcutChecks.Press(canceled, Key.Escape, ModifierKeys.None); await finishing;
                 Assert(acceptedCopies == 0 && discardedPath != null && !File.Exists(discardedPath) && !canceled.IsVisible);
                 Assert(!app.Windows.OfType<RecordingBorder>().Any());
+                await RecordingCleanupChecks.CheckWindows();
                 Console.WriteLine("PASS native recording controls: finish/copy, retry, repeated finish, countdown cancel, cancel pending copy, border cleanup.");
             }
             finally { fixture.Close(); }

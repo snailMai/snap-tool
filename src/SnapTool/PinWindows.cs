@@ -6,7 +6,8 @@ using SnapTool.Core;
 
 namespace SnapTool;
 
-internal sealed class PinWindows(System.Func<ShortcutProfile>? getShortcuts = null)
+internal sealed class PinWindows(System.Func<ShortcutProfile>? getShortcuts = null,
+    System.Func<BitmapSource, System.Threading.CancellationToken, System.Threading.Tasks.Task<OcrTextLayout>>? recognize = null)
 {
     private readonly List<PinWindow> windows = [];
     private bool suspended;
@@ -14,7 +15,7 @@ internal sealed class PinWindows(System.Func<ShortcutProfile>? getShortcuts = nu
     internal int Count => windows.Count;
     internal PinWindow Add(BitmapSource image, PixelRect selection)
     {
-        var window = new PinWindow(image, selection, getShortcuts: getShortcuts);
+        var window = new PinWindow(image, selection, getShortcuts: getShortcuts, recognize: recognize);
         window.Closed += (_, _) => { windows.Remove(window); if (pending == window) pending = null; };
         windows.Add(window);
         try

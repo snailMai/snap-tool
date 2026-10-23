@@ -36,6 +36,22 @@ internal static class TranslationWindowChecks
             OcrChecks.Pump(async () =>
             {
                 fixture.Show();
+                int clipboardCalls = 0; bool clipboardClosed = false;
+                var clipboard = new TranslationWindow("Hello\r\nworld", (text, target, _) =>
+                {
+                    Assert(text == "Hello\r\nworld" && target == "zh-CHS", "Clipboard source or default target changed.");
+                    clipboardCalls++; return Task.FromResult("你好");
+                }, (_, _) => throw new Exception("Must not copy automatically"), fromClipboard: true);
+                clipboard.Closed += (_, _) => clipboardClosed = true;
+                try
+                {
+                    await Activate(clipboard); await Wait(() => clipboard.ResultBox.Text == "你好", "Clipboard translation did not complete.");
+                    Assert(RefreshChecks.Descendants<TextBlock>(clipboard).Any(t => t.Text == "剪贴板翻译"), "Missing clipboard heading.");
+                    clipboard.Activate(); await Task.Delay(40); Assert(clipboardCalls == 1, "Activation repeated translation.");
+                    await Activate(fixture); await Wait(() => clipboardClosed, "Clipboard window did not close on external activation.");
+                    Console.WriteLine("PASS clipboard translation window: multiline input, Chinese default, one initial request, no automatic copy and external-click close.");
+                }
+                finally { if (!clipboardClosed) clipboard.Close(); }
                 var normal = new TranslationWindow("synthetic source", (_, _, _) => Task.FromResult("synthetic result"));
                 bool normalClosed = false; normal.Closed += (_, _) => normalClosed = true;
                 try
@@ -51,7 +67,7 @@ internal static class TranslationWindowChecks
                 finally { if (!normalClosed) normal.Close(); }
 
                 var late = new TaskCompletionSource<string>(); CancellationToken requestToken = default; bool pendingClosed = false;
-                var pending = new TranslationWindow("synthetic pending", (_, _, token) => { requestToken = token; return late.Task; });
+                var pending = new TranslationWindow("synthetic pending", (_, _, token) => { requestToken = token; return late.Task; }, fromClipboard: true);
                 pending.Closed += (_, _) => pendingClosed = true;
                 try
                 {

@@ -10,7 +10,8 @@ namespace SnapTool;
 internal sealed class SettingsWindow : Window
 {
     internal SettingsWindow(ShortcutProfile current, Action<ShortcutProfile> saveShortcuts,
-        Func<YoudaoCredentials> loadTranslation, Action<YoudaoCredentials> saveTranslation)
+        Func<YoudaoCredentials> loadTranslation, Action<YoudaoCredentials> saveTranslation,
+        Func<bool>? loadCopySelection = null, Action<bool>? saveCopySelection = null)
     {
         TranslationUi.Style(this); Title = "Snap Tool · 配置"; Width = 700; Height = 720; MinWidth = 650; MinHeight = 500;
         var root = new DockPanel { Margin = new Thickness(24) }; Content = root;
@@ -27,7 +28,7 @@ internal sealed class SettingsWindow : Window
         tabs.SelectionChanged += (_, _) =>
         {
             if (translation.IsSelected && translation.Content == null)
-                translation.Content = new TranslationSettingsPanel(loadTranslation, saveTranslation);
+                translation.Content = new TranslationSettingsPanel(loadTranslation, saveTranslation, loadCopySelection, saveCopySelection);
         };
         PreviewKeyDown += (_, e) => { if (e.Key == Key.Escape) { e.Handled = true; Close(); } };
     }
@@ -44,7 +45,7 @@ internal sealed class ShortcutSettingsPanel : UserControl
         heading.Children.Add(TranslationUi.Text("勾选组合键并选择按键。保存后立即生效，下次启动继续使用。"));
         DockPanel.SetDock(heading, Dock.Top); root.Children.Add(heading);
         var bottom = new StackPanel(); DockPanel.SetDock(bottom, Dock.Bottom); root.Children.Add(bottom);
-        bottom.Children.Add(TranslationUi.Text("仅“开始截图”在全局生效，其余在对应窗口内生效。文字输入框保留标准编辑快捷键。", 12));
+        bottom.Children.Add(TranslationUi.Text("“开始截图”和“剪贴板翻译”在全局生效，其余在对应窗口内生效。文字输入框保留标准编辑快捷键。", 12));
         status = TranslationUi.Text("", 12); status.Foreground = Brushes.Firebrick; bottom.Children.Add(status);
         var buttons = new WrapPanel(); bottom.Children.Add(buttons);
         buttons.Children.Add(TranslationUi.Button("保存", () =>
@@ -66,6 +67,7 @@ internal sealed class ShortcutSettingsPanel : UserControl
             }
             var ctrl = Modifier("Ctrl"); var alt = Modifier("Alt"); var shift = Modifier("Shift");
             var key = new ComboBox { Width = 140, VerticalContentAlignment = VerticalAlignment.Center };
+            if (action == ShortcutAction.ClipboardTranslate) key.Items.Add(new ComboBoxItem { Content = "未设置", Tag = Key.None });
             foreach (var value in ShortcutProfile.Keys) key.Items.Add(new ComboBoxItem { Content = ShortcutGesture.KeyName(value), Tag = value });
             System.Windows.Automation.AutomationProperties.SetName(key, label + " 按键");
             row.Children.Add(key); list.Children.Add(row); rows.Add(action, (ctrl, alt, shift, key));

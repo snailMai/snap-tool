@@ -16,6 +16,8 @@ internal sealed class RecordingJob(RecordingSize size, string? temporaryDirector
     internal TimeSpan Elapsed => clock.Elapsed;
     internal int Frames => Volatile.Read(ref frames);
     internal string? PendingPath { get; private set; }
+    internal string? CleanupPath { get; private set; }
+    internal bool CleanupRecorded { get; private set; }
     internal void Stop() => stop = true;
 
     internal async Task Run(Func<CancellationToken, Task<SoftwareBitmap>> read, CancellationToken token)
@@ -51,7 +53,7 @@ internal sealed class RecordingJob(RecordingSize size, string? temporaryDirector
         {
             clock.Stop();
             // Keep the completed GIF available for clipboard retries.
-            if (!encoded && File.Exists(temporary)) File.Delete(temporary);
+            if (!encoded) DiscardFile(temporary);
         }
     }
 
@@ -60,7 +62,30 @@ internal sealed class RecordingJob(RecordingSize size, string? temporaryDirector
 
     internal void Discard()
     {
-        if (PendingPath == null) return;
-        File.Delete(PendingPath); PendingPath = null;
+        string? path = PendingPath ?? CleanupPath;
+        PendingPath = null;
+        if (path != null) DiscardFile(path);
+    }
+
+    private void DiscardFile(string path)
+    {
+        string marker = path + ".cleanup";
+        try
+        {
+            File.Delete(path); File.Delete(marker);
+            CleanupPath = null; CleanupRecorded = false;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            CleanupPath = path;
+            // Only this job's generated path is recorded; deletion failure must not mask cancellation or capture errors.
+            try
+            {
+                File.WriteAllText(marker, "SnapTool recording cleanup pending\nFile: " + Path.GetFileName(path) + "\nReason: " + ex.GetType().Name + "\n");
+                CleanupRecorded = true;
+            }
+            catch (Exception recordError) when (recordError is IOException or UnauthorizedAccessException)
+            { CleanupRecorded = File.Exists(marker); }
+        }
     }
 }

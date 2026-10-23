@@ -15,6 +15,15 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        if (args.Contains("--pin-text-checks")) { PinTextChecks.Run(Test); return failed == 0 ? 0 : 1; }
+        if (args.Contains("--clipboard-translation-checks")) { ClipboardTranslationChecks.Run(Test); return failed == 0 ? 0 : 1; }
+        if (args.Contains("--recording-cleanup-checks")) { RecordingCleanupChecks.Run(Test); return failed == 0 ? 0 : 1; }
+        if (args.Contains("--recording-cleanup-window-checks"))
+        {
+            var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+            Test("native recording cleanup", () => OcrChecks.Pump(RecordingCleanupChecks.CheckWindows));
+            app.Shutdown(); return failed == 0 ? 0 : 1;
+        }
         if (args.Contains("--optimization-benchmark")) { OptimizationBenchmarks.Run(args[Array.IndexOf(args, "--optimization-benchmark") + 1]); return 0; }
         if (args.Contains("--memory-benchmark")) { MemoryBenchmarks.Run(args[Array.IndexOf(args, "--memory-benchmark") + 1]); return 0; }
         if (args.Contains("--memory-checks")) { MemoryChecks.Run(Test); return failed == 0 ? 0 : 1; }
