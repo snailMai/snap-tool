@@ -240,6 +240,12 @@ internal sealed partial class OverlayWindow : Window
         RefreshTextEditor();
         status.Text = session.Status;
         status.Visibility = string.IsNullOrEmpty(status.Text) ? Visibility.Collapsed : Visibility.Visible;
+        bool copyFailed = session.Status.StartsWith("复制失败", StringComparison.Ordinal);
+        status.Foreground = copyFailed ? Brushes.Firebrick : Brushes.DimGray;
+        status.Background = copyFailed ? Brushes.MistyRose : Brushes.Transparent;
+        status.FontWeight = copyFailed ? FontWeights.SemiBold : FontWeights.Normal;
+        status.FontSize = copyFailed ? 14 : 12;
+        status.Padding = copyFailed ? new Thickness(8) : default;
         if (toolbar.Visibility == Visibility.Visible) PlaceToolbar();
     }
     private async void OnKey(object sender, KeyEventArgs e) => await HandleKey(e, Keyboard.Modifiers);

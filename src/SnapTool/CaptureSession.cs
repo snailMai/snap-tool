@@ -292,7 +292,7 @@ internal sealed class CaptureSession(DesktopSnapshot snapshot, Action finished, 
     {
         FinishTextEditing();
         if (Busy || Dragging || Selection.Rectangle.IsEmpty || closed) return;
-        Busy = true;
+        Busy = true; Status = "正在复制图片…"; Refresh();
         using var cancellation = new CancellationTokenSource();
         outputCancellation = cancellation;
         try
@@ -304,10 +304,17 @@ internal sealed class CaptureSession(DesktopSnapshot snapshot, Action finished, 
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
         catch (Exception ex)
         {
-            if (!closed) MessageBox.Show(owner, "复制失败，请重试。选区已保留。\n" + ex.Message,
-                "Snap Tool", MessageBoxButton.OK, MessageBoxImage.Warning);
+            if (!closed) Status = "复制失败，截图已保留。请再次点击“复制”或按复制快捷键重试。\n" + ex.Message;
         }
-        finally { outputCancellation = null; Busy = false; }
+        finally
+        {
+            outputCancellation = null; Busy = false;
+            if (!closed)
+            {
+                Refresh();
+                if (Status.StartsWith("复制失败", StringComparison.Ordinal)) owner.ShowToolbar();
+            }
+        }
     }
 
     internal void Save(OverlayWindow owner)

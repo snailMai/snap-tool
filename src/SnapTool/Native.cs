@@ -25,7 +25,9 @@ internal static class Native
     internal static extern bool UnregisterHotKey(IntPtr window, int id);
     [DllImport("user32.dll")] internal static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] internal static extern uint GetClipboardSequenceNumber();
+    [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool IsClipboardFormatAvailable(uint format);
     [DllImport("user32.dll")] private static extern IntPtr GetClipboardOwner();
+    [DllImport("user32.dll")] private static extern IntPtr GetOpenClipboardWindow();
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
     [DllImport("user32.dll")] private static extern short GetAsyncKeyState(int key);
     [DllImport("user32.dll", SetLastError = true)] private static extern uint SendInput(uint count, Input[] inputs, int size);
@@ -50,6 +52,13 @@ internal static class Native
         _ = GetWindowThreadProcessId(target, out uint targetProcess);
         _ = GetWindowThreadProcessId(GetClipboardOwner(), out uint clipboardProcess);
         return targetProcess != 0 && targetProcess == clipboardProcess;
+    }
+
+    internal static (uint Owner, uint Open) ClipboardProcesses()
+    {
+        _ = GetWindowThreadProcessId(GetClipboardOwner(), out uint owner);
+        _ = GetWindowThreadProcessId(GetOpenClipboardWindow(), out uint open);
+        return (owner, open);
     }
 
     internal static bool SendCopy(Func<Input[], uint>? send = null)

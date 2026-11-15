@@ -15,6 +15,7 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        if (args.Contains("--image-copy-checks")) { ImageCopyChecks.Run(Test); return failed == 0 ? 0 : 1; }
         if (args.Contains("--pin-text-checks")) { PinTextChecks.Run(Test); return failed == 0 ? 0 : 1; }
         if (args.Contains("--clipboard-translation-checks")) { ClipboardTranslationChecks.Run(Test); return failed == 0 ? 0 : 1; }
         if (args.Contains("--recording-cleanup-checks")) { RecordingCleanupChecks.Run(Test); return failed == 0 ? 0 : 1; }
@@ -156,6 +157,7 @@ internal static class Program
             }
         });
         OcrChecks.Run(Test);
+        ImageCopyChecks.Run(Test);
         TranslationChecks.Run(Test);
         AnnotationChecks.Run(Test);
         ArrowAnnotationChecks.Run(Test);

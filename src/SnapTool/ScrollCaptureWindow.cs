@@ -149,6 +149,8 @@ internal sealed class ScrollCaptureWindow : Window
     {
         if (closed || finishing) return;
         finishing = true; timer.Stop(); finish.IsEnabled = false;
+        status.Foreground = Brushes.DimGray; status.Background = Brushes.Transparent;
+        status.FontWeight = FontWeights.Normal; status.ToolTip = null;
         try
         {
             await sampling;
@@ -166,7 +168,15 @@ internal sealed class ScrollCaptureWindow : Window
             Close();
         }
         catch (OperationCanceledException) when (closed) { }
-        catch (Exception) { if (!closed) status.Text = "复制失败，已保留采集内容，请点击完成重试或取消。"; }
+        catch (Exception ex)
+        {
+            if (!closed)
+            {
+                status.Text = "复制失败，长截图已保留。\n请点击“完成”重试，或取消。";
+                status.Foreground = Brushes.Firebrick; status.Background = Brushes.MistyRose; status.FontWeight = FontWeights.SemiBold;
+                status.ToolTip = ex.Message;
+            }
+        }
         finally { finishing = false; if (!closed) finish.IsEnabled = true; }
     }
 
