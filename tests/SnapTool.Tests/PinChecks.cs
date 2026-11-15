@@ -46,6 +46,73 @@ internal static class PinChecks
             g.Move(new(-1900, 50), new(-1920, 0, 0, 1080)); g.Reset(new(-1920, 0, 0, 1080));
             Assert(g.Scale == 1 && g.Bounds.Width == 600 && g.Bounds.Height == 400 && g.Bounds.Left < 0);
         });
+        test("pin spans adjacent screens without snapping to the cursor screen", () =>
+        {
+            PixelRect[] areas = [new(0, 0, 1920, 1080), new(1920, 0, 3840, 1080)];
+            var g = new PinGeometry(900, 300, new(100, 100), areas[0]);
+            for (int x = 1300; x <= 2200; x += 20)
+            {
+                g.Move(new(x, 100), x < 1920 ? areas[0] : areas[1], areas);
+                Assert(g.Bounds == new PixelRect(x, 100, x + 900, 400));
+            }
+            g.Move(new(1620, 100), areas[1], areas);
+            Assert(g.Bounds.Intersect(areas[0]).Width == 300 && g.Bounds.Intersect(areas[1]).Width == 600);
+        });
+        test("pin spans negative and offset monitor coordinates", () =>
+        {
+            PixelRect[] areas = [new(-1920, -1080, 0, 0), new(0, -300, 2560, 1140)];
+            var g = new PinGeometry(900, 220, new(-1000, -500), areas[0]);
+            g.Move(new(-300, -250), areas[1], areas);
+            Assert(g.Bounds == new PixelRect(-300, -250, 600, -30));
+            Assert(g.Bounds.Intersect(areas[0]).Width == 300 && g.Bounds.Intersect(areas[1]).Width == 600);
+        });
+        test("pin spans vertically stacked screens", () =>
+        {
+            PixelRect[] areas = [new(0, -1080, 1920, 0), new(0, 0, 1920, 1080)];
+            var g = new PinGeometry(900, 600, new(100, -800), areas[0]);
+            g.Move(new(400, -200), areas[1], areas);
+            Assert(g.Bounds.Intersect(areas[0]).Height == 200 && g.Bounds.Intersect(areas[1]).Height == 400);
+        });
+        test("pin cross-screen zoom reset and reposition preserve the center and physical pixels", () =>
+        {
+            PixelRect[] areas = [new(0, 0, 1920, 1040), new(1920, 0, 4480, 1400)];
+            var g = new PinGeometry(900, 300, new(100, 100), areas[0]);
+            g.Move(new(1620, 100), areas[1], areas);
+            var original = g.Bounds;
+            g.Zoom(1.1, areas[1], areas);
+            Assert(g.Bounds.Left == 1575 && g.Bounds.Width == 990 && g.Bounds.Height == 330);
+            g.Reset(areas[1], areas);
+            g.Move(new(g.Bounds.Left, g.Bounds.Top), areas[0], areas);
+            Assert(g.Bounds == original && g.ImageWidth == 900 && g.ImageHeight == 300);
+        });
+        test("pin cannot disappear into a gap in the desktop bounding rectangle", () =>
+        {
+            PixelRect[] areas = [new(0, 0, 1920, 1080), new(2560, 500, 4480, 1580)];
+            var g = new PinGeometry(300, 200, new(100, 100), areas[0]);
+            g.Move(new(2060, 50), areas[1], areas);
+            Assert(g.Bounds == new PixelRect(1620, 50, 1920, 250) && g.Scale == 1);
+            g.Zoom(10, areas[1], areas);
+            g.Move(new(100000, -100000), areas[1], areas);
+            Assert(areas.Any(area => g.Bounds.Intersect(area).Width >= 40 && g.Bounds.Intersect(area).Height >= 40));
+        });
+        test("pin returns to the remaining screen after monitor removal without changing scale", () =>
+        {
+            PixelRect[] areas = [new(0, 0, 1920, 1080), new(1920, 0, 3840, 1080)];
+            var g = new PinGeometry(900, 300, new(100, 100), areas[0]);
+            g.Move(new(2200, 100), areas[1], areas);
+            g.Move(new(g.Bounds.Left, g.Bounds.Top), areas[0], [areas[0]]);
+            Assert(g.Bounds == new PixelRect(1020, 100, 1920, 400) && g.Scale == 1);
+        });
+        test("pin rejects empty multi-screen work areas without moving", () =>
+        {
+            var area = new PixelRect(0, 0, 1920, 1080);
+            var g = new PinGeometry(900, 300, new(100, 100), area);
+            var original = g.Bounds;
+            int rejected = 0;
+            foreach (PixelRect[] areas in new PixelRect[][] { [], [area, default] })
+                try { g.Move(new(500, 500), area, areas); } catch (ArgumentException) { rejected++; }
+            Assert(rejected == 2 && g.Bounds == original);
+        });
         test("pin zoom bounds and large reset retain reachable area", () =>
         {
             var area = new PixelRect(0, 0, 1920, 1040); var g = new PinGeometry(7680, 4320, new(0, 0), area);
@@ -180,9 +247,34 @@ internal static class PinChecks
                 await Task.Delay(100); CheckBounds(first); Assert(first.Geometry.Bounds.Width == 900);
                 foreach (var monitor in Native.Monitors())
                 {
-                    first.Geometry.Move(new(monitor.Left + 60, monitor.Top + 60), monitor); first.Reposition();
+                    first.Move(new(monitor.Left + 60, monitor.Top + 60)); first.Reposition();
                     await Task.Delay(150); CheckBounds(first);
                 }
+                var workAreas = System.Windows.Forms.Screen.AllScreens.Select(monitor =>
+                {
+                    var area = monitor.WorkingArea;
+                    return new PixelRect(area.Left, area.Top, area.Right, area.Bottom);
+                }).ToArray();
+                bool checkedSeam = false;
+                foreach (var left in workAreas)
+                foreach (var right in workAreas)
+                {
+                    int top = Math.Max(left.Top, right.Top) + 60;
+                    if (left.Right != right.Left || Math.Min(left.Bottom, right.Bottom) < top + 250) continue;
+                    var origin = new PixelPoint(left.Right - 300, top);
+                    first.Move(origin); first.Reposition();
+                    await Task.Delay(150); CheckBounds(first);
+                    Assert(first.Geometry.Bounds.Left == origin.X && first.Geometry.Bounds.Top == origin.Y);
+                    Assert(first.Geometry.Bounds.Intersect(left).Width == 300 && first.Geometry.Bounds.Intersect(right).Width == 600);
+                    first.Zoom(1.1); await Task.Delay(100); CheckBounds(first);
+                    Assert(!first.Geometry.Bounds.Intersect(left).IsEmpty && !first.Geometry.Bounds.Intersect(right).IsEmpty);
+                    first.ResetScale(); first.Reposition(); await Task.Delay(100); CheckBounds(first);
+                    Assert(first.Geometry.Bounds == new PixelRect(origin.X, origin.Y, origin.X + 900, origin.Y + 220));
+                    Assert(Pixels(first.Original!).SequenceEqual(Pixels(image)));
+                    checkedSeam = true;
+                }
+                Console.WriteLine(checkedSeam ? "PASS native pin seam: one third left, two thirds right; zoom, reset, reposition and original pixels preserved."
+                    : "SKIP native pin seam: no suitable horizontally adjacent displays; synthetic layouts covered by regression checks.");
                 manager.Suspend(); Assert(!first.IsVisible && !second.IsVisible);
                 manager.Resume(); await Task.Delay(100); Assert(first.IsVisible && second.IsVisible);
                 first.Zoom(1.5);

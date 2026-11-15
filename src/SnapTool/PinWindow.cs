@@ -114,7 +114,7 @@ internal sealed class PinWindow : Window
             if (selectingText) { UpdateTextSelection(point); return; }
             if (!dragging) { Cursor = TextLayout?.Hit(point.X, point.Y) >= 0 ? Cursors.IBeam : Cursors.Arrow; return; }
             var p = Native.CursorPosition();
-            Geometry.Move(new(dragOrigin.X + p.X - dragAnchor.X, dragOrigin.Y + p.Y - dragAnchor.Y), WorkArea(p)); ApplyBounds();
+            Move(new(dragOrigin.X + p.X - dragAnchor.X, dragOrigin.Y + p.Y - dragAnchor.Y));
         };
         MouseLeftButtonUp += (_, _) => EndPointerDrag();
         LostMouseCapture += (_, _) => { dragging = selectingText = false; ApplyPendingLayout(); };
@@ -236,10 +236,16 @@ internal sealed class PinWindow : Window
         var r = System.Windows.Forms.Screen.FromPoint(new System.Drawing.Point(point.X, point.Y)).WorkingArea;
         return new(r.Left, r.Top, r.Right, r.Bottom);
     }
+    private static PixelRect[] WorkAreas() => Array.ConvertAll(System.Windows.Forms.Screen.AllScreens, monitor =>
+    {
+        var area = monitor.WorkingArea;
+        return new PixelRect(area.Left, area.Top, area.Right, area.Bottom);
+    });
     private PixelRect CurrentWorkArea() => WorkArea(new(Geometry.Bounds.Left + Geometry.Bounds.Width / 2, Geometry.Bounds.Top + Math.Min(20, Geometry.Bounds.Height / 2)));
-    internal void Reposition() { Geometry.Move(new(Geometry.Bounds.Left, Geometry.Bounds.Top), CurrentWorkArea()); ApplyBounds(); }
-    internal void Zoom(double factor) { if (Busy || closed) return; Geometry.Zoom(factor, CurrentWorkArea()); ApplyBounds(); }
-    internal void ResetScale() { if (Busy || closed) return; Geometry.Reset(CurrentWorkArea()); ApplyBounds(); }
+    internal void Move(PixelPoint origin) { Geometry.Move(origin, WorkArea(origin), WorkAreas()); ApplyBounds(); }
+    internal void Reposition() => Move(new(Geometry.Bounds.Left, Geometry.Bounds.Top));
+    internal void Zoom(double factor) { if (Busy || closed) return; Geometry.Zoom(factor, CurrentWorkArea(), WorkAreas()); ApplyBounds(); }
+    internal void ResetScale() { if (Busy || closed) return; Geometry.Reset(CurrentWorkArea(), WorkAreas()); ApplyBounds(); }
     private void ApplyBounds()
     {
         if (closed || positioning) return;
